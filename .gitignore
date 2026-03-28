@@ -1,0 +1,50 @@
+# === Environment ===
+venv/
+.env
+config/.env
+*.env
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# === Data (never commit raw data) ===
+data/raw/*
+data/processed/*
+data/external/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/external/.gitkeep
+*.csv
+*.json
+*.parquet
+*.db
+*.sqlite
+
+# === Jupyter ===
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# === IDE ===
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Logs ===
+logs/
+*.log
+
+# === Models (large files → use DVC or git-lfs) ===
+models/*.pkl
+models/*.joblib
+models/*.h5
