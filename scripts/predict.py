@@ -18,6 +18,7 @@ from src.models.poisson_model import PoissonModel
 from src.simulation.monte_carlo import MonteCarloSimulator
 from src.utils.logger import get_logger
 from config.config import config
+from src.features.injury_impact import calculate_missing_impact
 
 log = get_logger("predict")
 app = typer.Typer()
@@ -76,6 +77,22 @@ def predict(
 
     df = pd.read_csv(path)
     log.info(f"Loaded {len(df)} matches for model fitting")
+
+    # ---------------------------------------------------------
+    # LIVE REGIME: Verletzungen & Missing Impact abfragen
+    # ---------------------------------------------------------
+    log.info(f"Hole tagesaktuelle Kader- und Verletzungsdaten für {home}...")
+    home_impact = calculate_missing_impact(home)
+    
+    log.info(f"Hole tagesaktuelle Kader- und Verletzungsdaten für {away}...")
+    away_impact = calculate_missing_impact(away)
+    
+    # (Optional) Eine kleine Warnung, wenn ein Team extrem geschwächt ist:
+    if home_impact and home_impact > 15.0:
+        log.warning(f"ACHTUNG: {home} ist stark geschwächt! ({home_impact:.1f}% des Kaderwerts fehlen)")
+    if away_impact and away_impact > 15.0:
+        log.warning(f"ACHTUNG: {away} ist stark geschwächt! ({away_impact:.1f}% des Kaderwerts fehlen)")
+    # ---------------------------------------------------------
 
     # Fit Poisson model
     model = PoissonModel()

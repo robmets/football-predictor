@@ -30,6 +30,7 @@ class Team(Base):
     short_name  = Column(String)
     league      = Column(String)
     country     = Column(String)
+    transfermarkt_id = Column(String, nullable=True)
 
 
 class Match(Base):
