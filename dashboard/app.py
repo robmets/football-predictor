@@ -17,6 +17,8 @@ from src.models.poisson_model import PoissonModel
 from src.simulation.monte_carlo import MonteCarloSimulator
 from src.utils.database import get_session, Match, Team
 from config.config import config
+from src.collectors.odds_collector import OddsCollector
+from src.features.value_bet_detector import ValueBetDetector
 
 # ── Page Config ──────────────────────────────────────────────────────────────
 
@@ -246,7 +248,7 @@ with st.sidebar:
 
     page = st.radio(
         "Navigation",
-        ["🎯 Match Prediction", "📊 Team Ratings", "📈 Data Explorer", "ℹ️ About"],
+        ["🎯 Match Prediction", "📊 Team Ratings", "💰 Value Bets", "📈 Data Explorer", "ℹ️ About"],
         label_visibility="collapsed",
     )
 
@@ -380,8 +382,8 @@ if page == "🎯 Match Prediction":
             model.fit(df)
             sim = MonteCarloSimulator(model)
             result = sim.simulate(home_team, away_team, n=sims)
-            poisson_pred = model.predict(home_team, away_team)          
-            result["score_matrix"] = poisson_pred["score_matrix"]       
+            poisson_pred = model.predict(home_team, away_team)
+            result["score_matrix"] = poisson_pred["score_matrix"]
 
         # ── Matchup Header
         st.markdown(f"""
@@ -531,6 +533,190 @@ elif page == "📊 Team Ratings":
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 3: DATA EXPLORER
 # ══════════════════════════════════════════════════════════════════════════════
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 3: VALUE BETS
+# ══════════════════════════════════════════════════════════════════════════════
+
+elif page == "💰 Value Bets":
+    st.markdown('<p class="dashboard-header">Value Bets</p>', unsafe_allow_html=True)
+    st.markdown('<p class="dashboard-sub">Modell vs. Buchmacher · Edge-Analyse · Marktvergleich</p>', unsafe_allow_html=True)
+    st.markdown("---")
+
+    if not config.ODDS_API_KEY:
+        st.warning("⚠️ Kein ODDS_API_KEY konfiguriert. Bitte in config/.env eintragen.")
+        st.code("ODDS_API_KEY=your_key_here", language="bash")
+        st.markdown("Kostenlosen Key bekommst du auf [the-odds-api.com](https://the-odds-api.com)")
+        st.stop()
+
+    df = load_features(league)
+    if df.empty:
+        st.error("Keine Feature-Daten. Bitte build_features.py ausführen.")
+        st.stop()
+
+    # Manual match input for comparison
+    st.markdown('<p class="section-title">Einzelspiel analysieren</p>', unsafe_allow_html=True)
+
+    db_teams = load_teams_from_db()
+    all_teams = sorted(
+        t for t in (set(df["home_team"].dropna()) | set(df["away_team"].dropna()) | set(db_teams))
+        if not str(t).startswith("ID:")
+    )
+
+    vc1, vc2, vc3 = st.columns([5, 1, 5])
+    with vc1:
+        vb_home = st.selectbox("🏠 Heimmannschaft", all_teams, key="vb_home")
+    with vc2:
+        st.markdown("<br><div style='text-align:center'><span class='vs-badge'>VS</span></div>", unsafe_allow_html=True)
+    with vc3:
+        vb_away = st.selectbox("✈️ Auswärtsmannschaft", all_teams, index=1, key="vb_away")
+
+    analyze_btn = st.button("🔍 Analysieren", type="primary", use_container_width=True)
+
+    if analyze_btn and vb_home != vb_away:
+        with st.spinner("Modell wird gefittet & Odds werden geladen..."):
+            # Fit model
+            model = PoissonModel()
+            model.fit(df)
+            sim = MonteCarloSimulator(model)
+            model_result = sim.simulate(vb_home, vb_away, n=10_000)
+
+            # Fetch odds
+            odds_collector = OddsCollector()
+            consensus = odds_collector.get_consensus_odds(league)
+
+        if consensus.empty:
+            st.error("Keine Marktdaten verfügbar. Entweder kein Key, keine Verbindung, oder das Spiel ist nicht gelistet.")
+
+            # Show model-only result
+            st.markdown('<p class="section-title">Modell-Vorhersage (ohne Marktvergleich)</p>', unsafe_allow_html=True)
+            mc1, mc2, mc3 = st.columns(3)
+            def model_metric(col, label, val, color):
+                col.markdown(f'''<div class="metric-card">
+                    <div class="metric-label">{label}</div>
+                    <div class="metric-value {color}">{val}</div>
+                </div>''', unsafe_allow_html=True)
+            model_metric(mc1, f"Heimsieg {vb_home[:14]}", f"{model_result['prob_home_win']:.1%}", "green")
+            model_metric(mc2, "Unentschieden", f"{model_result['prob_draw']:.1%}", "")
+            model_metric(mc3, f"Auswärtssieg {vb_away[:14]}", f"{model_result['prob_away_win']:.1%}", "red")
+        else:
+            # Find the match in odds
+            match_odds = consensus[
+                (consensus["home_team"].str.contains(vb_home[:6], case=False, na=False)) &
+                (consensus["away_team"].str.contains(vb_away[:6], case=False, na=False))
+            ]
+
+            if match_odds.empty:
+                st.warning(f"Spiel {vb_home} vs {vb_away} nicht in aktuellen Marktdaten. Spiel evtl. noch nicht gelistet.")
+            else:
+                mkt = match_odds.iloc[0]
+                detector = ValueBetDetector()
+                analysis = detector.analyze(
+                    home_team=vb_home, away_team=vb_away,
+                    model_home=model_result["prob_home_win"],
+                    model_draw=model_result["prob_draw"],
+                    model_away=model_result["prob_away_win"],
+                    market_home=float(mkt["market_home"]),
+                    market_draw=float(mkt["market_draw"]),
+                    market_away=float(mkt["market_away"]),
+                    avg_margin=float(mkt.get("avg_margin", 0)),
+                )
+
+                # ── Vergleichs-Tabelle
+                st.markdown('<p class="section-title">Modell vs. Markt</p>', unsafe_allow_html=True)
+
+                comp_data = {
+                    "Outcome":     ["Heimsieg", "Unentschieden", "Auswärtssieg"],
+                    "Modell %":    [analysis["model_home"], analysis["model_draw"], analysis["model_away"]],
+                    "Markt %":     [analysis["market_home"], analysis["market_draw"], analysis["market_away"]],
+                    "Edge (PP)":   [analysis["edge_home"], analysis["edge_draw"], analysis["edge_away"]],
+                }
+                comp_df = pd.DataFrame(comp_data)
+
+                # Color-coded bar chart
+                fig_comp = go.Figure()
+                colors_model  = ["#4ade80", "#94a3b8", "#f87171"]
+                colors_market = ["#166534", "#334155", "#7f1d1d"]
+
+                for i, outcome in enumerate(["Heimsieg", "Unentschieden", "Auswärtssieg"]):
+                    fig_comp.add_trace(go.Bar(
+                        name=f"Modell — {outcome}",
+                        x=[outcome], y=[comp_data["Modell %"][i]],
+                        marker_color=colors_model[i],
+                        text=f"{comp_data['Modell %'][i]:.1f}%",
+                        textposition="outside",
+                        textfont=dict(family="DM Mono", size=10),
+                        offsetgroup=0,
+                    ))
+                    fig_comp.add_trace(go.Bar(
+                        name=f"Markt — {outcome}",
+                        x=[outcome], y=[comp_data["Markt %"][i]],
+                        marker_color=colors_market[i],
+                        text=f"{comp_data['Markt %'][i]:.1f}%",
+                        textposition="outside",
+                        textfont=dict(family="DM Mono", size=10),
+                        offsetgroup=1,
+                    ))
+
+                fig_comp.update_layout(
+                    barmode="group", height=300,
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#0a0e1a",
+                    xaxis=dict(tickfont=dict(family="DM Mono", size=11, color="#e2e8f0"), gridcolor="#111827"),
+                    yaxis=dict(title=dict(text="%", font=dict(family="DM Mono", size=10, color="#64748b")),
+                               tickfont=dict(family="DM Mono", size=9, color="#64748b"), gridcolor="#111827"),
+                    legend=dict(font=dict(family="DM Mono", size=9, color="#94a3b8"), bgcolor="rgba(0,0,0,0)"),
+                    margin=dict(t=30, b=10, l=40, r=10),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig_comp, use_container_width=True)
+
+                # ── Edge-Anzeige
+                ec1, ec2, ec3, ec4 = st.columns(4)
+                def edge_metric(col, label, edge):
+                    color = "green" if edge >= 5 else ("red" if edge <= -5 else "")
+                    prefix = "▲" if edge > 0 else ("▼" if edge < 0 else "=")
+                    col.markdown(f'''<div class="metric-card">
+                        <div class="metric-label">{label}</div>
+                        <div class="metric-value {color}">{prefix}{abs(edge):.1f} PP</div>
+                    </div>''', unsafe_allow_html=True)
+
+                edge_metric(ec1, "Edge Heimsieg", analysis["edge_home"])
+                edge_metric(ec2, "Edge Unentschieden", analysis["edge_draw"])
+                edge_metric(ec3, "Edge Auswärtssieg", analysis["edge_away"])
+                ec4.markdown(f'''<div class="metric-card">
+                    <div class="metric-label">Buchmacher-Marge</div>
+                    <div class="metric-value amber">{analysis["avg_margin_pct"]:.1f}%</div>
+                </div>''', unsafe_allow_html=True)
+
+                # ── Value Bets
+                st.markdown('<p class="section-title">Value Bets gefunden</p>', unsafe_allow_html=True)
+                if analysis["has_value"]:
+                    for vb in analysis["value_bets"]:
+                        st.markdown(f'''
+                        <div style="background:#0c1e0c;border:1px solid #166534;border-radius:10px;padding:16px 20px;margin:8px 0;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <div>
+                                    <span style="font-family:'Syne',sans-serif;font-size:1.1rem;font-weight:700;color:#4ade80">{vb["rating"]}</span>
+                                    <span style="font-family:'DM Mono',monospace;font-size:0.8rem;color:#94a3b8;margin-left:12px">{vb["outcome"]}</span>
+                                </div>
+                                <div style="text-align:right;font-family:'DM Mono',monospace;font-size:0.85rem;color:#86efac">
+                                    Modell: {vb["model_prob"]:.1f}% | Markt: {vb["market_prob"]:.1f}% | Edge: +{vb["edge_pct"]:.1f} PP
+                                </div>
+                            </div>
+                        </div>''', unsafe_allow_html=True)
+                else:
+                    st.markdown('''
+                    <div style="background:#111827;border:1px solid #1e2d4a;border-radius:10px;padding:16px 20px;color:#64748b;font-family:'DM Mono',monospace;font-size:0.85rem;">
+                        Kein Value gefunden — Modell und Markt sind sich einig (Edge < 5 Prozentpunkte)
+                    </div>''', unsafe_allow_html=True)
+
+                if analysis["disagreement"]:
+                    st.markdown(f'''
+                    <div class="warning-banner" style="margin-top:12px">
+                        ⚡ Modell und Markt sind sich uneinig über den Favoriten:<br>
+                        Modell → <strong>{analysis["model_favourite"]}</strong> &nbsp;|&nbsp; Markt → <strong>{analysis["market_favourite"]}</strong>
+                    </div>''', unsafe_allow_html=True)
 
 elif page == "📈 Data Explorer":
     st.markdown('<p class="dashboard-header">Data Explorer</p>', unsafe_allow_html=True)
