@@ -23,6 +23,7 @@ from src.features.injury_impact import calculate_missing_impact
 from src.collectors.weather_collector import WeatherCollector
 from src.features.live_form import LiveFormCalculator
 from config.config import config
+from src.models.xgboost_model import XGBoostFeedbackModel
 
 log = get_logger("predict")
 app = typer.Typer()
@@ -128,6 +129,22 @@ def predict(
     )
     result["home_form"] = home_form
     result["away_form"] = away_form
+    result["home_injury_impact"] = home_impact or 0.0
+    result["away_injury_impact"] = away_impact or 0.0
+    result["home_form_ppg"] = home_form["form_ppg"]
+    result["away_form_ppg"] = away_form["form_ppg"]
+
+    # XGBoost Ensemble (falls Modell trainiert)
+    xgb = XGBoostFeedbackModel()
+    if xgb.is_trained:
+        result = xgb.get_ensemble(result)
+        log.info(f"Ensemble: Poisson {1-result['ensemble_weight_xgb']:.0%} + XGBoost {result['ensemble_weight_xgb']:.0%}")
+
+    # Vorhersage in DB speichern
+    pred_id = XGBoostFeedbackModel.save_prediction(result, league=league)
+    log.info(f"Vorhersage-ID: {pred_id} — nach dem Spiel eintragen:")
+    log.info(f"  python scripts/enter_result.py --id {pred_id} --home-goals X --away-goals Y")
+
     _print_prediction(result)
 
 

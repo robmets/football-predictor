@@ -30,7 +30,6 @@ class Team(Base):
     short_name  = Column(String)
     league      = Column(String)
     country     = Column(String)
-    transfermarkt_id = Column(String, nullable=True)
 
 
 class Match(Base):
@@ -53,17 +52,41 @@ class Match(Base):
 class Prediction(Base):
     __tablename__ = "predictions"
 
-    id              = Column(Integer, primary_key=True)
-    match_id        = Column(Integer, ForeignKey("matches.api_id"))
-    created_at      = Column(DateTime)
-    model_version   = Column(String)
-    prob_home_win   = Column(Float)
-    prob_draw       = Column(Float)
-    prob_away_win   = Column(Float)
-    expected_home_goals = Column(Float)
-    expected_away_goals = Column(Float)
-    confidence      = Column(Float)
-    simulation_runs = Column(Integer)
+    id                   = Column(Integer, primary_key=True)
+    created_at           = Column(DateTime)
+    league               = Column(String)
+
+    # Teams
+    home_team            = Column(String, nullable=False)
+    away_team            = Column(String, nullable=False)
+
+    # Modell-Vorhersage
+    prob_home_win        = Column(Float)
+    prob_draw            = Column(Float)
+    prob_away_win        = Column(Float)
+    expected_home_goals  = Column(Float)
+    expected_away_goals  = Column(Float)
+    predicted_winner     = Column(String)   # H / D / A
+    confidence           = Column(String)   # HIGH / MEDIUM / LOW / TOSS-UP
+    simulation_runs      = Column(Integer)
+
+    # Einflussfaktoren zum Zeitpunkt der Vorhersage
+    home_injury_impact   = Column(Float)
+    away_injury_impact   = Column(Float)
+    home_form_ppg        = Column(Float)
+    away_form_ppg        = Column(Float)
+    weather_impact       = Column(Float)
+    home_form_factor     = Column(Float)
+    away_form_factor     = Column(Float)
+
+    # Tatsächliches Ergebnis (wird NACH dem Spiel eingetragen)
+    actual_home_goals    = Column(Integer)
+    actual_away_goals    = Column(Integer)
+    actual_result        = Column(String)   # H / D / A
+    result_entered_at    = Column(DateTime)
+
+    # War die Vorhersage korrekt?
+    prediction_correct   = Column(Boolean)  # True/False/None (noch offen)
 
 
 # ── Engine & Session ─────────────────────────────────────────────────────────

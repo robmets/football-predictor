@@ -18,6 +18,7 @@ from src.simulation.monte_carlo import MonteCarloSimulator
 from src.utils.database import get_session, Match, Team
 from config.config import config
 from src.collectors.odds_collector import OddsCollector
+from src.models.xgboost_model import XGBoostFeedbackModel
 from src.collectors.weather_collector import WeatherCollector
 from src.features.injury_impact import calculate_missing_impact
 from src.features.live_form import LiveFormCalculator
@@ -251,7 +252,7 @@ with st.sidebar:
 
     page = st.radio(
         "Navigation",
-        ["🎯 Match Prediction", "📊 Team Ratings", "💰 Value Bets", "📈 Data Explorer", "ℹ️ About"],
+        ["🎯 Match Prediction", "📊 Team Ratings", "💰 Value Bets", "📋 Feedback & Training", "📈 Data Explorer", "ℹ️ About"],
         label_visibility="collapsed",
     )
 
@@ -808,6 +809,163 @@ elif page == "💰 Value Bets":
                         ⚡ Modell und Markt sind sich uneinig über den Favoriten:<br>
                         Modell → <strong>{analysis["model_favourite"]}</strong> &nbsp;|&nbsp; Markt → <strong>{analysis["market_favourite"]}</strong>
                     </div>''', unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: FEEDBACK & TRAINING
+# ══════════════════════════════════════════════════════════════════════════════
+
+elif page == "📋 Feedback & Training":
+    st.markdown('<p class="dashboard-header">Feedback & Training</p>', unsafe_allow_html=True)
+    st.markdown('<p class="dashboard-sub">Ergebnisse eintragen · XGBoost trainieren · Modell verbessern</p>', unsafe_allow_html=True)
+    st.markdown("---")
+
+    xgb = XGBoostFeedbackModel()
+
+    # ── XGBoost Status ──────────────────────────────────────────────────────
+    st.markdown('<p class="section-title">Modell-Status</p>', unsafe_allow_html=True)
+
+    s1, s2, s3, s4 = st.columns(4)
+
+    session = get_session()
+    from src.utils.database import Prediction as PredModel
+    total_preds   = session.query(PredModel).count()
+    open_preds    = session.query(PredModel).filter(PredModel.actual_result == None).count()
+    closed_preds  = session.query(PredModel).filter(PredModel.actual_result != None).count()
+    correct_preds = session.query(PredModel).filter(PredModel.prediction_correct == True).count()
+    session.close()
+
+    accuracy_str = f"{correct_preds/closed_preds:.1%}" if closed_preds > 0 else "—"
+
+    def status_card(col, label, value, color=""):
+        col.markdown(f'''<div class="metric-card">
+            <div class="metric-label">{label}</div>
+            <div class="metric-value {color}">{value}</div>
+        </div>''', unsafe_allow_html=True)
+
+    status_card(s1, "Vorhersagen gesamt", total_preds)
+    status_card(s2, "Offen (kein Ergebnis)", open_preds, "amber")
+    status_card(s3, "Trefferquote", accuracy_str, "green" if closed_preds > 0 else "")
+    status_card(s4, "XGBoost",
+        f"✅ {xgb.accuracy:.1%}" if xgb.is_trained else f"⏳ {closed_preds}/10",
+        "green" if xgb.is_trained else "amber")
+
+    # ── Ergebnis eintragen ──────────────────────────────────────────────────
+    st.markdown('<p class="section-title">Ergebnis eintragen</p>', unsafe_allow_html=True)
+
+    session = get_session()
+    open_predictions = session.query(PredModel).filter(
+        PredModel.actual_result == None
+    ).order_by(PredModel.created_at.desc()).all()
+    session.close()
+
+    if not open_predictions:
+        st.markdown('''<div style="background:#111827;border:1px solid #1e2d4a;border-radius:10px;
+            padding:16px 20px;color:#64748b;font-family:'DM Mono',monospace;font-size:0.85rem;">
+            Keine offenen Vorhersagen — erst eine Simulation auf der Match Prediction Seite starten.
+        </div>''', unsafe_allow_html=True)
+    else:
+        # Dropdown mit offenen Vorhersagen
+        pred_options = {
+            f"ID {p.id} | {str(p.created_at)[:10]} | {p.home_team} vs {p.away_team} [{p.predicted_winner}]": p.id
+            for p in open_predictions
+        }
+        selected_label = st.selectbox(
+            "Vorhersage auswählen",
+            options=list(pred_options.keys()),
+            key="pred_select"
+        )
+        selected_id = pred_options[selected_label]
+        selected_pred = next(p for p in open_predictions if p.id == selected_id)
+
+        fc1, fc2, fc3 = st.columns([4, 1, 4])
+        with fc1:
+            home_goals = st.number_input(
+                f"🏠 {selected_pred.home_team[:25]} — Tore",
+                min_value=0, max_value=20, value=0, step=1, key="hg"
+            )
+        with fc2:
+            st.markdown("<br><div style='text-align:center;font-size:1.5rem'>:</div>", unsafe_allow_html=True)
+        with fc3:
+            away_goals = st.number_input(
+                f"✈️ {selected_pred.away_team[:25]} — Tore",
+                min_value=0, max_value=20, value=0, step=1, key="ag"
+            )
+
+        # Zeige Vorhersage zum Vergleich
+        st.markdown(f'''<div style="background:#0a0e1a;border:1px solid #1e2d4a;border-radius:10px;
+            padding:12px 20px;font-family:'DM Mono',monospace;font-size:0.8rem;color:#64748b;margin:8px 0;">
+            Prognose: Heimsieg {selected_pred.prob_home_win:.1%} |
+            Unentschieden {selected_pred.prob_draw:.1%} |
+            Auswärtssieg {selected_pred.prob_away_win:.1%}
+        </div>''', unsafe_allow_html=True)
+
+        if st.button("✅ Ergebnis speichern", type="primary", use_container_width=True):
+            success = XGBoostFeedbackModel.enter_result(selected_id, int(home_goals), int(away_goals))
+            if success:
+                actual = "H" if home_goals > away_goals else ("A" if home_goals < away_goals else "D")
+                correct = actual == selected_pred.predicted_winner
+                color = "#4ade80" if correct else "#f87171"
+                icon  = "✅" if correct else "❌"
+                st.markdown(f'''<div style="background:#0c1e0c;border:1px solid #166534;border-radius:10px;
+                    padding:14px 20px;color:{color};font-family:'DM Mono',monospace;font-size:0.9rem;">
+                    {icon} Ergebnis gespeichert: {home_goals}:{away_goals}
+                    — Prognose war {"RICHTIG" if correct else "FALSCH"}
+                </div>''', unsafe_allow_html=True)
+                st.rerun()
+
+    # ── Alle Ergebnisse ─────────────────────────────────────────────────────
+    session = get_session()
+    past = session.query(PredModel).filter(
+        PredModel.actual_result != None
+    ).order_by(PredModel.created_at.desc()).all()
+    session.close()
+
+    if past:
+        st.markdown('<p class="section-title">Bisherige Ergebnisse</p>', unsafe_allow_html=True)
+        rows = []
+        for p in past:
+            rows.append({
+                "Datum":      str(p.created_at)[:10],
+                "Spiel":      f"{p.home_team} vs {p.away_team}",
+                "Prognose":   p.predicted_winner,
+                "Konf.":      p.confidence or "?",
+                "Ergebnis":   f"{p.actual_home_goals}:{p.actual_away_goals}",
+                "Korrekt":    "✅" if p.prediction_correct else "❌",
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    # ── XGBoost Training ────────────────────────────────────────────────────
+    st.markdown('<p class="section-title">XGBoost Training</p>', unsafe_allow_html=True)
+
+    MIN_SAMPLES = 10
+    if closed_preds < MIN_SAMPLES:
+        st.markdown(f'''<div style="background:#111827;border:1px solid #1e2d4a;border-radius:10px;
+            padding:16px 20px;color:#64748b;font-family:'DM Mono',monospace;font-size:0.85rem;">
+            ⏳ Noch {MIN_SAMPLES - closed_preds} Ergebnisse bis zum ersten Training
+            ({closed_preds} / {MIN_SAMPLES} vorhanden)
+        </div>''', unsafe_allow_html=True)
+    else:
+        tc1, tc2 = st.columns([3, 1])
+        with tc1:
+            if xgb.is_trained:
+                st.markdown(f'''<div style="background:#0c1e0c;border:1px solid #166534;border-radius:10px;
+                    padding:14px 20px;font-family:'DM Mono',monospace;font-size:0.82rem;color:#4ade80;">
+                    ✅ XGBoost aktiv — Accuracy: {xgb.accuracy:.1%} |
+                    Trainiert: {xgb.trained_at.strftime("%d.%m.%Y %H:%M") if xgb.trained_at else "?"} |
+                    {xgb.n_training_samples} Samples
+                </div>''', unsafe_allow_html=True)
+            else:
+                st.markdown("<div style=\"background:#111827;border:1px solid #1e2d4a;border-radius:10px;padding:14px 20px;font-family:'DM Mono',monospace;font-size:0.82rem;color:#64748b;\">Modell noch nicht trainiert</div>", unsafe_allow_html=True)
+        with tc2:
+            if st.button("🧠 Training starten", type="primary", use_container_width=True):
+                with st.spinner("XGBoost trainiert..."):
+                    result = xgb.train()
+                if result["success"]:
+                    st.success(f"✅ Accuracy: {result['accuracy']:.1%} auf {result['test_size']} Test-Spielen")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {result['error']}")
 
 elif page == "📈 Data Explorer":
     st.markdown('<p class="dashboard-header">Data Explorer</p>', unsafe_allow_html=True)
