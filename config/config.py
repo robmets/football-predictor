@@ -7,9 +7,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 import os
 
-# Load .env from config/ folder
-_env_path = Path(__file__).parent / ".env"
-load_dotenv(dotenv_path=_env_path)
+# Load .env — suche in mehreren Orten
+from pathlib import Path as _P
+_env_paths = [
+    _P(__file__).parent / ".env",           # config/.env
+    _P(__file__).parent.parent / ".env",    # .env im Projektroot
+]
+for _ep in _env_paths:
+    if _ep.exists():
+        load_dotenv(dotenv_path=_ep, override=True)
+        break
 
 
 class Config:
@@ -26,15 +33,16 @@ class Config:
     DEFAULT_LEAGUE: str = os.getenv("DEFAULT_LEAGUE", "BL1")
     SIMULATION_RUNS: int = int(os.getenv("SIMULATION_RUNS", "10000"))
 
-    # --- Leagues supported by football-data.org ---
+    # --- Leagues supported (football-data.org codes) ---
     SUPPORTED_LEAGUES: dict = {
         "BL1": "Bundesliga",
         "PL":  "Premier League",
-        "CL":  "Champions League",
         "PD":  "La Liga",
         "SA":  "Serie A",
         "FL1": "Ligue 1",
+        "CL":  "Champions League",
     }
+
 
     # --- API Base URLs ---
     FOOTBALL_DATA_BASE_URL: str = "https://api.football-data.org/v4"

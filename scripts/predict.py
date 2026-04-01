@@ -1,29 +1,31 @@
 """
 Script: Predict a match using the full pipeline.
-Loads data → fits Poisson model → runs Monte Carlo → prints results.
 
 Usage:
     python scripts/predict.py --home "Bayern München" --away "Borussia Dortmund"
-    python scripts/predict.py --home "Bayer 04 Leverkusen" --away "RB Leipzig" --sims 20000
+    python scripts/predict.py --home "Liverpool FC" --away "Arsenal FC" --league PL
+    python scripts/predict.py --home "Real Madrid CF" --away "FC Barcelona" --league PD
 """
 
 import sys
 from pathlib import Path
+
+# MUSS als erstes stehen — vor allen src-Imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import pandas as pd
 import typer
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.models.poisson_model import PoissonModel
 from src.simulation.monte_carlo import MonteCarloSimulator
 from src.utils.logger import get_logger
-from config.config import config
 from src.features.injury_impact import calculate_missing_impact
+from src.collectors.weather_collector import WeatherCollector
+from src.features.live_form import LiveFormCalculator
+from config.config import config
 
 log = get_logger("predict")
 app = typer.Typer()
-
-FEATURES_PATH = "data/processed/features_BL1.csv"
 
 
 def _bar(prob: float, width: int = 30) -> str:
@@ -32,19 +34,28 @@ def _bar(prob: float, width: int = 30) -> str:
 
 
 def _print_prediction(result: dict):
-    hw = result["prob_home_win"]
-    dr = result["prob_draw"]
-    aw = result["prob_away_win"]
+    hw   = result["prob_home_win"]
+    dr   = result["prob_draw"]
+    aw   = result["prob_away_win"]
     home = result["home_team"]
     away = result["away_team"]
 
-    print("\n" + "═" * 58)
+    print("\n" + "═" * 62)
     print(f"  ⚽  {home}  vs  {away}")
-    print("═" * 58)
+    print("═" * 62)
     print(f"\n  Expected goals:  {home[:20]:<20} {result['expected_home_goals']:.2f}")
     print(f"                   {away[:20]:<20} {result['expected_away_goals']:.2f}")
+
+    hf = result.get("home_form", {})
+    af = result.get("away_form", {})
+    if hf.get("source") == "api-football":
+        print(f"\n  Live-Form:       {home[:20]:<20} PPG={hf['form_ppg']:.2f}  "
+              f"Faktor={hf['breakdown']['combined']:+.1%}")
+        print(f"                   {away[:20]:<20} PPG={af['form_ppg']:.2f}  "
+              f"Faktor={af['breakdown']['combined']:+.1%}")
+
     print(f"\n  {'Outcome':<22} {'Probability':>10}   {'':30}")
-    print(f"  {'─'*64}")
+    print(f"  {'─' * 64}")
     print(f"  {'Home win  ' + home[:16]:<22} {hw:>9.1%}   {_bar(hw)}")
     print(f"  {'Draw':<22} {dr:>9.1%}   {_bar(dr)}")
     print(f"  {'Away win  ' + away[:16]:<22} {aw:>9.1%}   {_bar(aw)}")
@@ -58,55 +69,65 @@ def _print_prediction(result: dict):
     print(f"\n  Favourite:   {result['favourite']}")
     print(f"  Confidence:  {result['confidence']}  ({result['favourite_prob']:.1%})")
     print(f"  Simulations: {result['simulations']:,}")
-    print("═" * 58 + "\n")
+    print("═" * 62 + "\n")
 
 
 @app.command()
 def predict(
-    home: str = typer.Option(..., "--home", "-h", help="Home team name"),
-    away: str = typer.Option(..., "--away", "-a", help="Away team name"),
-    league: str = typer.Option("BL1", "--league", "-l"),
-    sims: int = typer.Option(config.SIMULATION_RUNS, "--sims", "-n"),
-    features_path: str = typer.Option(FEATURES_PATH, "--features"),
+    home:          str = typer.Option(...,    "--home",   "-h"),
+    away:          str = typer.Option(...,    "--away",   "-a"),
+    league:        str = typer.Option("BL1", "--league", "-l"),
+    sims:          int = typer.Option(config.SIMULATION_RUNS, "--sims", "-n"),
 ):
-    # Load feature data
-    path = features_path.replace("BL1", league)
-    if not Path(path).exists():
-        log.error(f"Features not found at {path}. Run build_features.py first.")
+    path = Path(f"data/processed/features_{league}.csv")
+    if not path.exists():
+        log.error(f"Features nicht gefunden: {path}")
+        log.error(f"Bitte ausführen: python scripts/update.py --league {league}")
         raise typer.Exit(1)
 
     df = pd.read_csv(path)
-    log.info(f"Loaded {len(df)} matches for model fitting")
+    log.info(f"Loaded {len(df)} matches für {config.SUPPORTED_LEAGUES.get(league, league)}")
 
-    # ---------------------------------------------------------
-    # LIVE REGIME: Verletzungen & Missing Impact abfragen
-    # ---------------------------------------------------------
-    log.info(f"Hole tagesaktuelle Kader- und Verletzungsdaten für {home}...")
+    # Verletzungen
+    log.info(f"Hole Verletzungsdaten für {home}...")
     home_impact = calculate_missing_impact(home)
-    
-    log.info(f"Hole tagesaktuelle Kader- und Verletzungsdaten für {away}...")
+    log.info(f"Hole Verletzungsdaten für {away}...")
     away_impact = calculate_missing_impact(away)
-    
-    # (Optional) Eine kleine Warnung, wenn ein Team extrem geschwächt ist:
-    if home_impact and home_impact > 15.0:
-        log.warning(f"ACHTUNG: {home} ist stark geschwächt! ({home_impact:.1f}% des Kaderwerts fehlen)")
-    if away_impact and away_impact > 15.0:
-        log.warning(f"ACHTUNG: {away} ist stark geschwächt! ({away_impact:.1f}% des Kaderwerts fehlen)")
-    # ---------------------------------------------------------
 
-    # Fit Poisson model
+    if home_impact and home_impact > 15.0:
+        log.warning(f"ACHTUNG: {home} stark geschwächt! ({home_impact:.1f}%)")
+    if away_impact and away_impact > 15.0:
+        log.warning(f"ACHTUNG: {away} stark geschwächt! ({away_impact:.1f}%)")
+
+    # Live-Form
+    form_calc = LiveFormCalculator()
+    home_form = form_calc.get_lambda_adjustment(home, league=league, injury_impact=home_impact or 0.0, features_df=df)
+    form_calc.print_summary(home, home_form)
+    away_form = form_calc.get_lambda_adjustment(away, league=league, injury_impact=away_impact or 0.0, features_df=df)
+    form_calc.print_summary(away, away_form)
+
+    # Wetter
+    weather = WeatherCollector().get_match_weather(home)
+    if weather["goal_impact_factor"] != 0:
+        log.info(f"Wetter: {weather['description']} ({weather['goal_impact_factor']:+.0%})")
+
+    # Modell & Simulation
     model = PoissonModel()
     model.fit(df)
+    print(f"\n  Team Ratings Top 5 ({config.SUPPORTED_LEAGUES.get(league, league)}):")
+    print(model.team_ratings().head(5).to_string(index=False))
 
-    # Print team ratings
-    ratings = model.team_ratings()
-    print(f"\n  Team Ratings (top 5):")
-    print(ratings.head(5).to_string(index=False))
-
-    # Run Monte Carlo simulation
-    sim = MonteCarloSimulator(model)
-    result = sim.simulate(home, away, n=sims)
-
+    sim    = MonteCarloSimulator(model)
+    result = sim.simulate(
+        home, away, n=sims,
+        home_injury_impact=home_impact or 0.0,
+        away_injury_impact=away_impact or 0.0,
+        weather_impact=weather["goal_impact_factor"],
+        home_form_factor=home_form["attack_factor"],
+        away_form_factor=away_form["attack_factor"],
+    )
+    result["home_form"] = home_form
+    result["away_form"] = away_form
     _print_prediction(result)
 
 

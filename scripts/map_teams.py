@@ -40,7 +40,10 @@ def run_smart_mapping():
     print("="*95)
 
     for team in teams:
-        team.transfermarkt_id = None  # Reset für sauberen Durchlauf
+        # Überspringe Teams die bereits gemappt sind
+        if team.transfermarkt_id:
+            print(f"{team.name:<25} | {'(bereits gemappt)':<20} | {'—':<25} | {team.transfermarkt_id}")
+            continue
         
         search_terms = get_search_terms(team.name)
         tm_id = None
@@ -71,4 +74,59 @@ def run_smart_mapping():
     log.info("Mapping abgeschlossen!")
 
 if __name__ == "__main__":
-    run_smart_mapping()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--league", "-l", default=None, help="Nur Teams einer Liga mappen (BL1, PL, PD, SA, FL1, CL)")
+    parser.add_argument("--reset", action="store_true", help="Alle TM-IDs zurücksetzen und neu mappen")
+    args = parser.parse_args()
+
+    session = get_session()
+    if args.reset:
+        log.warning("--reset: Alle TM-IDs werden zurückgesetzt!")
+        for t in session.query(Team).all():
+            t.transfermarkt_id = None
+        session.commit()
+        log.info("Reset abgeschlossen")
+    session.close()
+
+    if args.league:
+        log.info(f"Filtere auf Liga: {args.league}")
+        # Temporär: nur Teams der gewünschten Liga
+        original_query = Team
+        session2 = get_session()
+        teams_filtered = session2.query(Team).filter(Team.league == args.league).all()
+        session2.close()
+        log.info(f"{len(teams_filtered)} Teams für Liga {args.league} gefunden")
+        # Patch: run mapping only for filtered teams
+        collector = TransfermarktCollector()
+        print("\n" + "="*95)
+        print(f"{'Datenbank Name':<25} | {'TM Suchbegriff':<20} | {'Transfermarkt Name':<25} | {'TM-ID'}")
+        print("="*95)
+        session3 = get_session()
+        for team in session3.query(Team).filter(Team.league == args.league).all():
+            if team.transfermarkt_id:
+                print(f"{team.name:<25} | {'(bereits gemappt)':<20} | {'—':<25} | {team.transfermarkt_id}")
+                continue
+            search_terms = get_search_terms(team.name)
+            tm_id = None
+            used_term = ""
+            for term in search_terms:
+                tm_id = collector.search_club(search_term=term, original_name=team.name)
+                if tm_id:
+                    used_term = term
+                    break
+            if tm_id:
+                team.transfermarkt_id = str(tm_id)
+                session3.commit()
+                try:
+                    profile = collector._get(f"clubs/{tm_id}/profile")
+                    tm_name = profile.get("name", "?")
+                    print(f"{team.name:<25} | {used_term:<20} | {tm_name:<25} | {tm_id}")
+                except Exception:
+                    print(f"{team.name:<25} | {used_term:<20} | FEHLER | {tm_id}")
+            else:
+                print(f"{team.name:<25} | {'N/A':<20} | KEIN MAPPING GEFUNDEN | -")
+        session3.close()
+        print("="*95)
+    else:
+        run_smart_mapping()

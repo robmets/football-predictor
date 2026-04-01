@@ -64,13 +64,21 @@ class TransfermarktCollector:
             return None
         
         # Blacklist für ALLES was keine Profi-Herrenmannschaft ist
-        blacklist = ["u17", "u18", "u19", "u20", "u21", "u23", " ii", " 2", "junioren", "youth", "reserves", "women", "frauen"]
-        
+        blacklist = [
+            "u17", "u18", "u19", "u20", "u21", "u23",
+            " ii", " 2", " b",          # B-Teams / Reserven
+            " b ",                       # " B " mitten im Namen
+            "junioren", "youth", "reserves", "women", "frauen",
+            "amateur", "amateure", "academy", "under",
+        ]
+
         valid_results = []
         for result in results:
-            tm_name = result.get("name", "").lower()
-            # Nur hinzufügen, wenn KEIN Blacklist-Wort im Namen steckt
-            if not any(bw in tm_name for bw in blacklist):
+            tm_name = result.get("name", "").lower().strip()
+            # KEIN Blacklist-Wort im Namen + Name endet nicht auf " b"
+            is_blacklisted = any(bw in tm_name for bw in blacklist)
+            ends_with_b = tm_name.endswith(" b")
+            if not is_blacklisted and not ends_with_b:
                 valid_results.append(result)
                 
         if not valid_results:

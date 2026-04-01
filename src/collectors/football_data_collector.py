@@ -24,8 +24,10 @@ class FootballDataCollector:
     BASE_URL = config.FOOTBALL_DATA_BASE_URL
     HEADERS  = {"X-Auth-Token": config.FOOTBALL_DATA_API_KEY}
 
-    # football-data season codes vs. start year
-    CURRENT_SEASON = 2024
+    # football-data season codes vs. start year — dynamisch berechnet
+    # Saison 2025/26 startet im Juli 2025 → ab Juli gilt das aktuelle Jahr
+    from datetime import date as _date
+    CURRENT_SEASON = _date.today().year if _date.today().month >= 7 else _date.today().year - 1
 
     def __init__(self):
         config.validate()

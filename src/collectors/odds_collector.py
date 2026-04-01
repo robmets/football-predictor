@@ -9,6 +9,7 @@ Usage:
 
 import requests
 import pandas as pd
+import difflib
 from src.utils.logger import get_logger
 from config.config import config
 
@@ -155,3 +156,56 @@ class OddsCollector:
             .reset_index()
         )
         return consensus
+
+    def find_match(
+        self,
+        consensus_df: "pd.DataFrame",
+        home_team: str,
+        away_team: str,
+        threshold: float = 0.55,
+    ) -> "pd.Series | None":
+        """
+        Fuzzy-match a home/away team pair against the consensus odds DataFrame.
+        Uses SequenceMatcher so "Hamburger SV" matches "Hamburg" etc.
+
+        Args:
+            consensus_df: Output of get_consensus_odds()
+            home_team:    Our DB team name
+            away_team:    Our DB team name
+            threshold:    Minimum similarity score (0–1)
+
+        Returns:
+            Best-matching row as pd.Series, or None if no match found
+        """
+        if consensus_df.empty:
+            return None
+
+        best_score = 0.0
+        best_row   = None
+
+        for _, row in consensus_df.iterrows():
+            score_h = difflib.SequenceMatcher(
+                None, home_team.lower(), row["home_team"].lower()
+            ).ratio()
+            score_a = difflib.SequenceMatcher(
+                None, away_team.lower(), row["away_team"].lower()
+            ).ratio()
+            combined = (score_h + score_a) / 2
+
+            if combined > best_score:
+                best_score = combined
+                best_row   = row
+
+        if best_score >= threshold:
+            log.info(
+                f"Match found: '{home_team}' vs '{away_team}' → "
+                f"'{best_row['home_team']}' vs '{best_row['away_team']}' "
+                f"(score={best_score:.2f})"
+            )
+            return best_row
+
+        log.warning(
+            f"No odds match for '{home_team}' vs '{away_team}' "
+            f"(best score={best_score:.2f} < {threshold})"
+        )
+        return None

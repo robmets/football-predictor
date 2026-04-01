@@ -18,6 +18,9 @@ from src.simulation.monte_carlo import MonteCarloSimulator
 from src.utils.database import get_session, Match, Team
 from config.config import config
 from src.collectors.odds_collector import OddsCollector
+from src.collectors.weather_collector import WeatherCollector
+from src.features.injury_impact import calculate_missing_impact
+from src.features.live_form import LiveFormCalculator
 from src.features.value_bet_detector import ValueBetDetector
 
 # ── Page Config ──────────────────────────────────────────────────────────────
@@ -266,12 +269,53 @@ with st.sidebar:
     )
 
     st.markdown("---")
+
+    # ── Datenstand & Update-Button ────────────────────────────────────────
+    from src.utils.database import get_session, Match as _Match, Team as _Team
+
+    @st.cache_data(ttl=300)
+    def _db_status(lg):
+        sess = get_session()
+        count = sess.query(_Match).filter(_Match.league == lg, _Match.status == "FINISHED").count()
+        last  = sess.query(_Match).filter(_Match.league == lg, _Match.status == "FINISHED"
+                ).order_by(_Match.date.desc()).first()
+        sess.close()
+        return count, str(last.date) if last else "—"
+
+    _cnt, _last = _db_status(league)
     st.markdown(
-        '<p style="font-family:\'DM Mono\',monospace;font-size:0.65rem;color:#334155;">'
-        f'Stand: {datetime.now().strftime("%d.%m.%Y")}<br>'
-        'Modell: Poisson + Monte Carlo</p>',
-        unsafe_allow_html=True
+        f'''<p style="font-family:'DM Mono',monospace;font-size:0.65rem;color:#334155;line-height:1.8">
+        📊 {_cnt} Spiele in DB &nbsp;·&nbsp; Letztes: {_last}<br>
+        Modell: Poisson · Monte Carlo · Verletzungen · Wetter
+        </p>''',
+        unsafe_allow_html=True,
     )
+    if st.button("🔄 Neue Spiele laden", use_container_width=True):
+        with st.spinner("Aktualisiere Daten..."):
+            try:
+                import pandas as _pd
+                from src.collectors.football_data_collector import FootballDataCollector as _FDC
+                from src.features.feature_builder import FeatureBuilder as _FB
+                from pathlib import Path as _P
+                _FDC().fetch_matches(league=league, seasons=2)
+                _FDC().fetch_teams(league=league)
+                sess2 = get_session()
+                _matches = sess2.query(_Match).filter(_Match.league == league, _Match.status == "FINISHED").all()
+                _tmap = {t.api_id: t.name for t in sess2.query(_Team).all()}
+                sess2.close()
+                def _r(h, a): return "H" if h > a else ("A" if h < a else "D")
+                _rows = [{"match_id": m.api_id, "date": str(m.date), "league": m.league,
+                          "season": m.season, "matchday": m.matchday,
+                          "home_team": _tmap.get(m.home_team_id, f"ID:{m.home_team_id}"),
+                          "away_team": _tmap.get(m.away_team_id, f"ID:{m.away_team_id}"),
+                          "home_goals": m.home_goals, "away_goals": m.away_goals,
+                          "result": _r(m.home_goals, m.away_goals)} for m in _matches]
+                _feats = _FB(_pd.DataFrame(_rows)).build_features()
+                _P(f"data/processed/features_{league}.csv").write_text(_feats.to_csv(index=False))
+                st.cache_data.clear()
+                st.success(f"✅ {len(_feats)} Spiele geladen!")
+            except Exception as _e:
+                st.error(f"Fehler: {_e}")
 
 
 # ── Helper: Plotly Gauge ──────────────────────────────────────────────────────
@@ -377,13 +421,38 @@ if page == "🎯 Match Prediction":
     run_btn = st.button("⚡ Simulation starten", type="primary", use_container_width=True)
 
     if run_btn:
-        with st.spinner(f"Modell wird gefittet & {sims:,} Spiele simuliert..."):
+        with st.spinner(f"Lade Daten & simuliere {sims:,} Spiele..."):
             model = PoissonModel()
             model.fit(df)
+
+            # Verletzungen (Transfermarkt)
+            home_inj = calculate_missing_impact(home_team) or 0.0
+            away_inj = calculate_missing_impact(away_team) or 0.0
+
+            # Live-Form & Spieler-Ratings (api-football.com)
+            form_calc = LiveFormCalculator()
+            home_form = form_calc.get_lambda_adjustment(home_team, league=league, injury_impact=home_inj)
+            away_form = form_calc.get_lambda_adjustment(away_team, league=league, injury_impact=away_inj)
+
+            # Wetter
+            weather_col = WeatherCollector()
+            weather = weather_col.get_match_weather(home_team)
+
             sim = MonteCarloSimulator(model)
-            result = sim.simulate(home_team, away_team, n=sims)
+            result = sim.simulate(
+                home_team, away_team, n=sims,
+                home_injury_impact=home_inj,
+                away_injury_impact=away_inj,
+                weather_impact=weather["goal_impact_factor"],
+                home_form_factor=home_form["attack_factor"],
+                away_form_factor=away_form["attack_factor"],
+            )
             poisson_pred = model.predict(home_team, away_team)
             result["score_matrix"] = poisson_pred["score_matrix"]
+            result["home_form"] = home_form
+            result["away_form"] = away_form
+            result["home_injury_impact"] = home_inj
+            result["away_injury_impact"] = away_inj
 
         # ── Matchup Header
         st.markdown(f"""
@@ -398,6 +467,28 @@ if page == "🎯 Match Prediction":
             </div>
         </div>
         """, unsafe_allow_html=True)
+
+        # ── Spieler-Ratings
+        hf = result.get("home_form", {})
+        af = result.get("away_form", {})
+        if hf.get("avg_player_rating") or af.get("avg_player_rating"):
+            rc1, rc2 = st.columns(2)
+            for col, team, frm in [(rc1, home_team, hf), (rc2, away_team, af)]:
+                if frm.get("source") == "api-football":
+                    col.markdown(f'''<div style="background:#0a0e1a;border:1px solid #1e2d4a;border-radius:10px;
+                        padding:10px 16px;font-family:'DM Mono',monospace;font-size:0.78rem;margin-bottom:8px;">
+                        <span style="color:#38bdf8">📊 {team[:18]}</span><br>
+                        Form-PPG: <b>{frm.get("form_ppg", 1.5):.2f}</b> &nbsp;·&nbsp;
+                        Ø Rating: <b>{frm.get("avg_player_rating", "—")}</b> &nbsp;·&nbsp;
+                        Lambda-Anpassung: <b>{frm["breakdown"]["combined"]:+.1%}</b>
+                    </div>''', unsafe_allow_html=True)
+                    if frm.get("top_players"):
+                        with col.expander(f"Top-Spieler {team[:15]}"):
+                            for p in frm["top_players"][:5]:
+                                col.markdown(
+                                    f"`{p['name'][:20]:<20}` Rating: **{p['rating']:.1f}** | "
+                                    f"{p['goals']}G {p['assists']}A"
+                                )
 
         # ── 3 Gauges
         g1, g2, g3 = st.columns(3)

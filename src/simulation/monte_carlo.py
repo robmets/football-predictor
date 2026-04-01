@@ -36,15 +36,23 @@ class MonteCarloSimulator:
         away_team: str,
         n: int = 10_000,
         seed: int = None,
+        home_injury_impact: float = 0.0,
+        away_injury_impact: float = 0.0,
+        weather_impact: float = 0.0,
+        home_form_factor: float = 1.0,
+        away_form_factor: float = 1.0,
     ) -> dict:
         """
         Simulate a match N times and return aggregated probabilities.
 
         Args:
-            home_team: Name of the home team
-            away_team: Name of the away team
-            n:         Number of simulations (default 10,000)
-            seed:      Random seed for reproducibility
+            home_team:           Name of the home team
+            away_team:           Name of the away team
+            n:                   Number of simulations (default 10,000)
+            seed:                Random seed for reproducibility
+            home_injury_impact:  % of squad value missing for home team (0–100)
+            away_injury_impact:  % of squad value missing for away team (0–100)
+            weather_impact:      Goal reduction factor from weather (-0.10 to 0.0)
 
         Returns:
             Full prediction dict with simulation stats
@@ -53,6 +61,32 @@ class MonteCarloSimulator:
             np.random.seed(seed)
 
         lambda_h, lambda_a = self.model._expected_goals(home_team, away_team)
+
+        # ── Apply live form factor (api-football Form + Spieler-Ratings) ────
+        if home_form_factor != 1.0:
+            lambda_h = lambda_h * home_form_factor
+            log.info(f"Live-Form {home_team}: ×{home_form_factor:.3f} → λ={lambda_h:.2f}")
+        if away_form_factor != 1.0:
+            lambda_a = lambda_a * away_form_factor
+            log.info(f"Live-Form {away_team}: ×{away_form_factor:.3f} → λ={lambda_a:.2f}")
+
+        # ── Apply injury penalty to attack strength ──────────────────────────
+        INJURY_SENSITIVITY = 0.5
+        if home_injury_impact and home_injury_impact > 0:
+            penalty = min(home_injury_impact / 100 * INJURY_SENSITIVITY, 0.30)
+            lambda_h = lambda_h * (1 - penalty)
+            log.info(f"Injury penalty {home_team}: -{penalty*100:.1f}% attack → λ={lambda_h:.2f}")
+        if away_injury_impact and away_injury_impact > 0:
+            penalty = min(away_injury_impact / 100 * INJURY_SENSITIVITY, 0.30)
+            lambda_a = lambda_a * (1 - penalty)
+            log.info(f"Injury penalty {away_team}: -{penalty*100:.1f}% attack → λ={lambda_a:.2f}")
+
+        # ── Apply weather impact to both teams equally ──────────────────────
+        if weather_impact and weather_impact != 0:
+            lambda_h = lambda_h * (1 + weather_impact)
+            lambda_a = lambda_a * (1 + weather_impact)
+            log.info(f"Weather impact: {weather_impact:+.0%} on both teams → λ_h={lambda_h:.2f}, λ_a={lambda_a:.2f}")
+
         log.info(
             f"Simulating {n:,} matches: {home_team} (λ={lambda_h:.2f}) "
             f"vs {away_team} (λ={lambda_a:.2f})"
@@ -125,6 +159,9 @@ class MonteCarloSimulator:
             "favourite":           home_team if prob_home > prob_away else away_team,
             "favourite_prob":      round(max(prob_home, prob_away), 4),
             "confidence":          _confidence_label(max(prob_home, prob_away)),
+            "weather_impact":      round(weather_impact, 3),
+            "home_form_factor":    round(home_form_factor, 3),
+            "away_form_factor":    round(away_form_factor, 3),
         }
 
         log.success(
