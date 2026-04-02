@@ -4,7 +4,7 @@ Creates all tables on first run.
 """
 
 from sqlalchemy import (
-    create_engine, text,
+    create_engine,
     Column, Integer, String, Float, Date, DateTime, Boolean,
     ForeignKey, UniqueConstraint,
 )
@@ -24,12 +24,13 @@ class Base(DeclarativeBase):
 class Team(Base):
     __tablename__ = "teams"
 
-    id          = Column(Integer, primary_key=True)
-    api_id      = Column(Integer, unique=True, nullable=False)
-    name        = Column(String, nullable=False)
-    short_name  = Column(String)
-    league      = Column(String)
-    country     = Column(String)
+    id               = Column(Integer, primary_key=True)
+    api_id           = Column(Integer, unique=True, nullable=False)
+    name             = Column(String, nullable=False)
+    short_name       = Column(String)
+    league           = Column(String)
+    country          = Column(String)
+    transfermarkt_id = Column(String)   # ← Transfermarkt Club-ID
 
 
 class Match(Base):
@@ -46,7 +47,7 @@ class Match(Base):
     away_team_id    = Column(Integer, ForeignKey("teams.api_id"))
     home_goals      = Column(Integer)
     away_goals      = Column(Integer)
-    status          = Column(String)   # FINISHED, SCHEDULED, LIVE
+    status          = Column(String)
 
 
 class Prediction(Base):
@@ -55,22 +56,16 @@ class Prediction(Base):
     id                   = Column(Integer, primary_key=True)
     created_at           = Column(DateTime)
     league               = Column(String)
-
-    # Teams
     home_team            = Column(String, nullable=False)
     away_team            = Column(String, nullable=False)
-
-    # Modell-Vorhersage
     prob_home_win        = Column(Float)
     prob_draw            = Column(Float)
     prob_away_win        = Column(Float)
     expected_home_goals  = Column(Float)
     expected_away_goals  = Column(Float)
-    predicted_winner     = Column(String)   # H / D / A
-    confidence           = Column(String)   # HIGH / MEDIUM / LOW / TOSS-UP
+    predicted_winner     = Column(String)
+    confidence           = Column(String)
     simulation_runs      = Column(Integer)
-
-    # Einflussfaktoren zum Zeitpunkt der Vorhersage
     home_injury_impact   = Column(Float)
     away_injury_impact   = Column(Float)
     home_form_ppg        = Column(Float)
@@ -78,15 +73,11 @@ class Prediction(Base):
     weather_impact       = Column(Float)
     home_form_factor     = Column(Float)
     away_form_factor     = Column(Float)
-
-    # Tatsächliches Ergebnis (wird NACH dem Spiel eingetragen)
     actual_home_goals    = Column(Integer)
     actual_away_goals    = Column(Integer)
-    actual_result        = Column(String)   # H / D / A
+    actual_result        = Column(String)
     result_entered_at    = Column(DateTime)
-
-    # War die Vorhersage korrekt?
-    prediction_correct   = Column(Boolean)  # True/False/None (noch offen)
+    prediction_correct   = Column(Boolean)
 
 
 # ── Engine & Session ─────────────────────────────────────────────────────────

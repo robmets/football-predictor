@@ -223,10 +223,11 @@ def load_features(league: str = "BL1") -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
-def load_teams_from_db() -> list[str]:
+def load_teams_from_db(league: str = "BL1") -> list[str]:
+    """Lädt nur Teams der gewählten Liga aus der DB."""
     try:
         session = get_session()
-        teams = session.query(Team).all()
+        teams = session.query(Team).filter(Team.league == league).all()
         session.close()
         return sorted([t.name for t in teams if t.name])
     except Exception:
@@ -393,18 +394,17 @@ if page == "🎯 Match Prediction":
     st.markdown("---")
 
     df = load_features(league)
-    teams = load_teams_from_db()
+    teams = load_teams_from_db(league)
 
     if df.empty:
-        st.error(f"Keine Daten für {league}. Bitte zuerst `python scripts/build_features.py --league {league}` ausführen.")
+        st.error(f"Keine Daten für {league}. Bitte zuerst `python scripts/update.py --league {league}` ausführen.")
         st.stop()
 
+    # Teams aus Features-CSV + DB für diese Liga (kein ID: Prefix)
     all_teams = sorted(
-        t for t in (set(df["home_team"].dropna()) | set(df["away_team"].dropna()))
+        t for t in (set(df["home_team"].dropna()) | set(df["away_team"].dropna()) | set(teams))
         if not str(t).startswith("ID:")
     )
-    if teams:
-        all_teams = sorted(set(all_teams) | set(teams))
 
     col1, col2, col3 = st.columns([5, 1, 5])
     with col1:
@@ -650,7 +650,7 @@ elif page == "💰 Value Bets":
     # Manual match input for comparison
     st.markdown('<p class="section-title">Einzelspiel analysieren</p>', unsafe_allow_html=True)
 
-    db_teams = load_teams_from_db()
+    db_teams = load_teams_from_db(league)
     all_teams = sorted(
         t for t in (set(df["home_team"].dropna()) | set(df["away_team"].dropna()) | set(db_teams))
         if not str(t).startswith("ID:")
