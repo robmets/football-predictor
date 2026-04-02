@@ -33,12 +33,29 @@ def parse_tm_date(date_str: str):
     return None
 
 def parse_market_value(value_str) -> int:
-    """Macht aus Transfermarkt-Strings saubere Zahlen (z.B. '45000000' -> 45000000)."""
-    if not value_str or value_str in ["-", "Unbekannt", "0"]:
+    """Macht aus Transfermarkt-Strings ('€1.50m', '€500k') echte Zahlen."""
+    if not value_str or str(value_str).strip() in ["-", "Unbekannt", "0", "None", ""]:
         return 0
-    # Entfernt alles außer Zahlen (falls mal ein €-Zeichen oder Punkt mitkommt)
-    clean_str = re.sub(r'[^\d]', '', str(value_str))
-    return int(clean_str) if clean_str else 0
+        
+    val_str = str(value_str).lower().replace(",", ".")
+    
+    # Isoliert die reine Zahl (z.B. "1.50" oder "500")
+    match = re.search(r'[\d.]+', val_str)
+    if not match:
+        return 0
+        
+    try:
+        number = float(match.group())
+    except ValueError:
+        return 0
+        
+    # Die richtigen Nullen dranhängen!
+    if 'm' in val_str:
+        return int(number * 1000000)
+    elif 'k' in val_str:
+        return int(number * 1000)
+    else:
+        return int(number)
 
 def calculate_missing_impact(team_name: str):
     """Berechnet den prozentualen Marktwertverlust durch Ausfälle."""
@@ -115,7 +132,8 @@ def calculate_missing_impact(team_name: str):
         print("Keine Ausfälle. Das Team ist bei 100% Stärke!")
     print("="*85)
 
-    return impact_percentage
+    missing_names = [player["name"] for player in missing_players] # (Je nachdem wie deine Variable heißt)
+    return impact_percentage, missing_names
 
 if __name__ == "__main__":
     calculate_missing_impact("FC Bayern München")
