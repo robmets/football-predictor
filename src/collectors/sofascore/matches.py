@@ -1,8 +1,10 @@
 import logging
 from curl_cffi.requests import AsyncSession
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 log = logging.getLogger(__name__)
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=10))
 async def get_match_lineups_and_ratings(match_id: int) -> dict:
     """
     Ruft Aufstellungen für ein Sofascore-Spiel ab.
@@ -25,21 +27,16 @@ async def get_match_lineups_and_ratings(match_id: int) -> dict:
         response = await client.get(url, headers=headers)
 
         if response.status_code != 200:
-            raise Exception(
-                f"Sofascore Lineups API Fehler: Status {response.status_code}"
-            )
-
+            log.warning(f"Sofascore API Fehler (Match {match_id}): Status {response.status_code}. Versuche es erneut...")
+            raise Exception(f"Sofascore Lineups API Error: {response.status_code}")
+            
         data = response.json()
-
-        # Debug: zeige rohe Struktur
-        confirmed = data.get("confirmed", None)
-        home_players = data.get("home", {}).get("players", [])
-        away_players = data.get("away", {}).get("players", [])
-        log.info(
-            f"Sofascore /lineups: confirmed={confirmed}, "
-            f"home_players={len(home_players)}, away_players={len(away_players)}"
-        )
-
+        
+        log.info(f"SOFASCORE API DEBUG (Match ID: {match_id})")
+        log.info(f"Root Keys: {list(data.keys())}")
+        if "home" in data:
+            log.info(f"Home Keys: {list(data['home'].keys())}")
+        
         return parse_player_ratings(data)
 
 

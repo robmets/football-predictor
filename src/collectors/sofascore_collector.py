@@ -140,12 +140,26 @@ class SofascoreCollector:
                         best_match = player
                 
                 if best_match:
-                    # FIX: Holt sich sicher den Namen und die ID!
                     player_dict = best_match.get("player", best_match)
                     p_id = player_dict.get("id")
                     p_name = player_dict.get("name", "Unbekannt")
+                    position = player_dict.get("position", "")  # NEU: Position abfragen!
                     
-                    if p_id:
+                    # === SONDERREGEL FÜR TORHÜTER (Goalkeeper) ===
+                    if position == "G":
+                        # Torhüter haben andere/fehlende Radar-Attribute. Wir nutzen das normale Rating.
+                        season_rating = player_dict.get("avgRating") or player_dict.get("averageRating") or 6.8
+                        
+                        if float(season_rating) > 6.9:
+                            # Ein guter Stammkeeper fehlt! Harte Pauschalstrafe.
+                            penalty = 0.08  # 8% pauschale Strafe
+                            impact_penalty += penalty
+                            log.info(f"Sofascore Impact: Stamm-Torwart {p_name} fehlt (Rating {float(season_rating):.2f}) -> Heavy Penalty: -{penalty:.1%}")
+                        else:
+                            log.info(f"Sofascore Impact: Ersatz-Torwart {p_name} fehlt -> Keine Strafe.")
+                            
+                    # === NORMALE REGEL FÜR FELDSPIELER ===
+                    elif p_id:
                         stats = asyncio.run(get_player_stats_and_attributes(p_id))
                         attrs = stats.get("attributes", {})
                         vals = [v for v in attrs.values() if isinstance(v, (int, float))]
@@ -156,10 +170,9 @@ class SofascoreCollector:
                             # DAS DUELL: Verletzter Spieler vs. aktuelles Team
                             if player_avg > real_team_avg:
                                 diff = player_avg - real_team_avg
-                                # Skala: diff=5 → 2.5 Prozentpunkte (vergleichbar mit Transfermarkt-Impact)
-                                penalty = diff * 0.5
+                                penalty = diff * 0.005  # Strafe für überdurchschnittliche Ausfälle
                                 impact_penalty += penalty
-                                log.info(f"Sofascore Impact: {p_name} fehlt (Attribut Ø {player_avg:.1f} > Team-Ø {real_team_avg:.1f}) → Penalty: -{penalty:.2f}%")
+                                log.info(f"Sofascore Impact: {p_name} fehlt (Attribute Ø {player_avg:.1f} > Team-Ø {real_team_avg:.1f}) -> Penalty: -{penalty:.1%}")
                         else:
                             log.warning(f"Sofascore hat keine Attribute für {p_name} gefunden.")
                             
