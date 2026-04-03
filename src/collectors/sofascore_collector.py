@@ -35,44 +35,22 @@ class SofascoreCollector:
             return None
 
     def get_match_id(self, team_id: int, opponent_name: str) -> int:
-        """Sucht nach einem AKTUELLEN oder ZUKÜNFTIGEN Spiel gegen den Gegner."""
+        """Sucht im Kalender nach dem Spiel gegen den bestimmten Gegner."""
         try:
-            import time
-            events = asyncio.run(get_team_events(team_id))
-            now = time.time()
-            
-            # Sicherheitscheck: Falls events ein Dict ist (z.B. Fehler-Antwort), machen wir eine leere Liste daraus
-            if isinstance(events, dict):
-                events = events.get("events", [])
-                
-            if not isinstance(events, list):
-                return None
+            result = asyncio.run(get_team_events(team_id))
+            events = result.get("events", [])
             
             for event in events:
-                if not isinstance(event, dict):
-                    continue
-                    
-                h_name = event.get("home_team", {}).get("name", "")
-                a_name = event.get("away_team", {}).get("name", "")
+                home_name = event.get("home_team", {}).get("name", "")
+                away_name = event.get("away_team", {}).get("name", "")
                 
-                # Ist das der gesuchte Gegner?
-                if opponent_name in h_name or opponent_name in a_name or h_name in opponent_name or a_name in opponent_name:
-                    match_time = event.get("startTimestamp", 0)
-                    status = event.get("status", "")
-                    
-                    if status != "Ended" or (now - match_time) < (48 * 3600):
-                        return event.get("match_id") or event.get("id")
-                    else:
-                        log.info(f"Ignoriere altes Spiel aus der Vergangenheit: {h_name} vs {a_name} -> Erzwinge Modus C!")
-                        
-            return None # Kein aktuelles Spiel gefunden -> Modus C
-            
-        except Exception as e:
-            log.error(f"Fehler bei der Match-Suche: {e}")
+                # Mapping: Ist der Transfermarkt-Gegnername ähnlich dem Sofascore-Namen?
+                if (difflib.SequenceMatcher(None, opponent_name.lower(), home_name.lower()).ratio() > 0.7 or 
+                    difflib.SequenceMatcher(None, opponent_name.lower(), away_name.lower()).ratio() > 0.7):
+                    return event.get("match_id")
             return None
-            
         except Exception as e:
-            log.error(f"Fehler bei der Match-Suche: {e}")
+            log.error(f"Sofascore Match-Suche fehlgeschlagen: {e}")
             return None
 
     def get_match_ratings(self, match_id: int) -> dict | None:
@@ -162,26 +140,12 @@ class SofascoreCollector:
                         best_match = player
                 
                 if best_match:
+                    # FIX: Holt sich sicher den Namen und die ID!
                     player_dict = best_match.get("player", best_match)
                     p_id = player_dict.get("id")
                     p_name = player_dict.get("name", "Unbekannt")
-                    position = player_dict.get("position", "")  # NEU: Position abfragen!
                     
-                    # === SONDERREGEL FÜR TORHÜTER (Goalkeeper) ===
-                    if position == "G":
-                        # Torhüter haben andere/fehlende Radar-Attribute. Wir nutzen das normale Rating.
-                        season_rating = player_dict.get("avgRating") or player_dict.get("averageRating") or 6.8
-                        
-                        if float(season_rating) > 6.9:
-                            # Ein guter Stammkeeper fehlt! Harte Pauschalstrafe.
-                            penalty = 0.08  # 8% pauschale Strafe
-                            impact_penalty += penalty
-                            log.info(f"Sofascore Impact: Stamm-Torwart {p_name} fehlt (Rating {float(season_rating):.2f}) -> Heavy Penalty: -{penalty:.1%}")
-                        else:
-                            log.info(f"Sofascore Impact: Ersatz-Torwart {p_name} fehlt -> Keine Strafe.")
-                            
-                    # === NORMALE REGEL FÜR FELDSPIELER ===
-                    elif p_id:
+                    if p_id:
                         stats = asyncio.run(get_player_stats_and_attributes(p_id))
                         attrs = stats.get("attributes", {})
                         vals = [v for v in attrs.values() if isinstance(v, (int, float))]
@@ -192,9 +156,10 @@ class SofascoreCollector:
                             # DAS DUELL: Verletzter Spieler vs. aktuelles Team
                             if player_avg > real_team_avg:
                                 diff = player_avg - real_team_avg
-                                penalty = diff * 0.005  # Strafe für überdurchschnittliche Ausfälle
+                                # Skala: diff=5 → 2.5 Prozentpunkte (vergleichbar mit Transfermarkt-Impact)
+                                penalty = diff * 0.5
                                 impact_penalty += penalty
-                                log.info(f"Sofascore Impact: {p_name} fehlt (Attribute Ø {player_avg:.1f} > Team-Ø {real_team_avg:.1f}) -> Penalty: -{penalty:.1%}")
+                                log.info(f"Sofascore Impact: {p_name} fehlt (Attribut Ø {player_avg:.1f} > Team-Ø {real_team_avg:.1f}) → Penalty: -{penalty:.2f}%")
                         else:
                             log.warning(f"Sofascore hat keine Attribute für {p_name} gefunden.")
                             

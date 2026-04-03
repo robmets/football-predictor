@@ -23,6 +23,7 @@ from src.collectors.weather_collector import WeatherCollector
 from src.features.injury_impact import calculate_missing_impact
 from src.features.live_form import LiveFormCalculator
 from src.features.value_bet_detector import ValueBetDetector
+from src.features.context_engine import ContextEngine
 
 # ── Page Config ──────────────────────────────────────────────────────────────
 
@@ -260,7 +261,7 @@ with st.sidebar:
     st.markdown("---")
     league = st.selectbox(
         "Liga",
-        options=["BL1", "PL", "PD", "SA", "FL1", "CL"],
+        options=["BL1", "PL", "PD", "SA", "FL1"],
         format_func=lambda x: config.SUPPORTED_LEAGUES.get(x, x),
     )
     sims = st.select_slider(
@@ -292,7 +293,7 @@ with st.sidebar:
         </p>''',
         unsafe_allow_html=True,
     )
-    if st.button("🔄 Neue Spiele laden", width='stretch'):
+    if st.button("🔄 Neue Spiele laden", use_container_width=True):
         with st.spinner("Aktualisiere Daten..."):
             try:
                 import pandas as _pd
@@ -419,21 +420,38 @@ if page == "🎯 Match Prediction":
         st.warning("Bitte zwei verschiedene Teams wählen.")
         st.stop()
 
-    run_btn = st.button("⚡ Simulation starten", type="primary", width='stretch')
+    run_btn = st.button("⚡ Simulation starten", type="primary", use_container_width=True)
 
     if run_btn:
         with st.spinner(f"Lade Daten & simuliere {sims:,} Spiele..."):
             model = PoissonModel()
             model.fit(df)
 
-            # Verletzungen (Transfermarkt)
-            home_inj = calculate_missing_impact(home_team) or 0.0
-            away_inj = calculate_missing_impact(away_team) or 0.0
+            # Verletzungen — gibt (float, list) zurück
+            _h_inj = calculate_missing_impact(home_team)
+            _a_inj = calculate_missing_impact(away_team)
+            home_inj = _h_inj[0] if _h_inj else 0.0
+            away_inj = _a_inj[0] if _a_inj else 0.0
 
-            # Live-Form & Spieler-Ratings (api-football.com)
+            # Live-Form
             form_calc = LiveFormCalculator()
-            home_form = form_calc.get_lambda_adjustment(home_team, league=league, injury_impact=home_inj)
-            away_form = form_calc.get_lambda_adjustment(away_team, league=league, injury_impact=away_inj)
+            home_form = form_calc.get_lambda_adjustment(home_team, league=league, injury_impact=home_inj, features_df=df)
+            away_form = form_calc.get_lambda_adjustment(away_team, league=league, injury_impact=away_inj, features_df=df)
+
+            # Context Engine (Tabelle, Derbys, Motivation)
+            try:
+                from src.collectors.football_data_collector import FootballDataCollector as _FDC
+                standings = _FDC().get_live_standings(league)
+            except Exception:
+                standings = {}
+            ctx_engine = ContextEngine()
+            matchday = 20
+            if standings and home_team in standings:
+                matchday = standings[home_team].get("playedGames", 19) + 1
+            context = ctx_engine.calculate_context(home_team, away_team, league, matchday, standings)
+            # Motivation auf Form-Faktor anwenden
+            home_form["attack_factor"] = round(home_form["attack_factor"] * context["home_motivation"], 3)
+            away_form["attack_factor"] = round(away_form["attack_factor"] * context["away_motivation"], 3)
 
             # Wetter
             weather_col = WeatherCollector()
@@ -448,6 +466,9 @@ if page == "🎯 Match Prediction":
                 home_form_factor=home_form["attack_factor"],
                 away_form_factor=away_form["attack_factor"],
             )
+            result["is_derby"]        = context["is_derby"]
+            result["home_motivation"] = context["home_motivation"]
+            result["away_motivation"] = context["away_motivation"]
             poisson_pred = model.predict(home_team, away_team)
             result["score_matrix"] = poisson_pred["score_matrix"]
             result["home_form"] = home_form
@@ -456,12 +477,15 @@ if page == "🎯 Match Prediction":
             result["away_injury_impact"] = away_inj
 
         # ── Matchup Header
+        derby_badge = " 🔥 DERBY" if result.get("is_derby") else ""
+        home_boost = f" ×{result.get('home_motivation', 1.0)}" if result.get("home_motivation", 1.0) > 1.01 else ""
+        away_boost = f" ×{result.get('away_motivation', 1.0)}" if result.get("away_motivation", 1.0) > 1.01 else ""
         st.markdown(f"""
         <div class="matchup-header">
             <div style="display:flex;justify-content:space-between;align-items:center;">
-                <div class="team-name">{home_team}</div>
-                <div><span class="vs-badge">VS</span></div>
-                <div class="team-name">{away_team}</div>
+                <div class="team-name">{home_team}<span style="font-size:0.9rem;color:#fbbf24">{home_boost}</span></div>
+                <div><span class="vs-badge">VS{derby_badge}</span></div>
+                <div class="team-name">{away_team}<span style="font-size:0.9rem;color:#fbbf24">{away_boost}</span></div>
             </div>
             <div style="margin-top:12px;font-family:'DM Mono',monospace;font-size:0.72rem;color:#475569;">
                 {sims:,} Simulationen · Konfidenz: {result['confidence']} · Favorit: {result['favourite']}
@@ -494,11 +518,11 @@ if page == "🎯 Match Prediction":
         # ── 3 Gauges
         g1, g2, g3 = st.columns(3)
         with g1:
-            st.plotly_chart(prob_gauge(result["prob_home_win"], f"HEIMSIEG\n{home_team[:18]}", "#4ade80"), width='stretch')
+            st.plotly_chart(prob_gauge(result["prob_home_win"], f"HEIMSIEG\n{home_team[:18]}", "#4ade80"), use_container_width=True)
         with g2:
-            st.plotly_chart(prob_gauge(result["prob_draw"], "UNENTSCHIEDEN", "#94a3b8"), width='stretch')
+            st.plotly_chart(prob_gauge(result["prob_draw"], "UNENTSCHIEDEN", "#94a3b8"), use_container_width=True)
         with g3:
-            st.plotly_chart(prob_gauge(result["prob_away_win"], f"AUSWÄRTSSIEG\n{away_team[:18]}", "#f87171"), width='stretch')
+            st.plotly_chart(prob_gauge(result["prob_away_win"], f"AUSWÄRTSSIEG\n{away_team[:18]}", "#f87171"), use_container_width=True)
 
         # ── Expected Goals & Markets
         st.markdown('<p class="section-title">Erwartete Tore & Märkte</p>', unsafe_allow_html=True)
@@ -523,7 +547,7 @@ if page == "🎯 Match Prediction":
 
         with hc1:
             fig_heat = score_heatmap(result.get("score_matrix", {}), home_team, away_team)
-            st.plotly_chart(fig_heat, width='stretch')
+            st.plotly_chart(fig_heat, use_container_width=True)
 
         with hc2:
             st.markdown("**Wahrscheinlichste Ergebnisse**")
@@ -554,8 +578,6 @@ elif page == "📊 Team Ratings":
         model = PoissonModel()
         model.fit(df)
         ratings = model.team_ratings()
-        # ID:-Teams (alte Saisons ohne Namen) herausfiltern
-        ratings = ratings[~ratings["team"].astype(str).str.startswith("ID:")].reset_index(drop=True)
 
     # Bar chart: overall strength
     fig_bar = go.Figure(go.Bar(
@@ -579,7 +601,7 @@ elif page == "📊 Team Ratings":
         yaxis=dict(tickfont=dict(family="Inter", size=11, color="#e2e8f0"), autorange="reversed"),
         margin=dict(l=10, r=80, t=10, b=10),
     )
-    st.plotly_chart(fig_bar, width='stretch')
+    st.plotly_chart(fig_bar, use_container_width=True)
 
     # Attack vs Defence scatter
     st.markdown('<p class="section-title">Angriff vs Abwehr</p>', unsafe_allow_html=True)
@@ -615,15 +637,13 @@ elif page == "📊 Team Ratings":
         plot_bgcolor="#0a0e1a",
         margin=dict(t=10, b=50, l=60, r=20),
     )
-    st.plotly_chart(fig_scatter, width='stretch')
+    st.plotly_chart(fig_scatter, use_container_width=True)
 
     with st.expander("Rohdaten anzeigen"):
-        # background_gradient braucht matplotlib — wir nutzen einfaches Styling stattdessen
-        display_ratings = ratings.copy()
-        display_ratings["attack"]  = display_ratings["attack"].round(3)
-        display_ratings["defence"] = display_ratings["defence"].round(3)
-        display_ratings["overall"] = display_ratings["overall"].round(3)
-        st.dataframe(display_ratings, width='stretch', hide_index=True)
+        st.dataframe(
+            ratings.style.background_gradient(subset=["overall", "attack"], cmap="Blues"),
+            use_container_width=True,
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -668,7 +688,7 @@ elif page == "💰 Value Bets":
     with vc3:
         vb_away = st.selectbox("✈️ Auswärtsmannschaft", all_teams, index=1, key="vb_away")
 
-    analyze_btn = st.button("🔍 Analysieren", type="primary", width='stretch')
+    analyze_btn = st.button("🔍 Analysieren", type="primary", use_container_width=True)
 
     if analyze_btn and vb_home != vb_away:
         with st.spinner("Modell wird gefittet & Odds werden geladen..."):
@@ -697,47 +717,15 @@ elif page == "💰 Value Bets":
             model_metric(mc2, "Unentschieden", f"{model_result['prob_draw']:.1%}", "")
             model_metric(mc3, f"Auswärtssieg {vb_away[:14]}", f"{model_result['prob_away_win']:.1%}", "red")
         else:
-            # ── Robuster Fuzzy-Match: findet auch "Hamburg" für "Hamburger SV" ──
-            import difflib
+            # Find the match in odds
+            match_odds = consensus[
+                (consensus["home_team"].str.contains(vb_home[:6], case=False, na=False)) &
+                (consensus["away_team"].str.contains(vb_away[:6], case=False, na=False))
+            ]
 
-            def _best_match_idx(query: str, candidates: "pd.Series") -> float:
-                """Gibt den besten Ähnlichkeitswert zurück."""
-                q = query.lower().strip()
-                scores = candidates.str.lower().str.strip().apply(
-                    lambda c: max(
-                        difflib.SequenceMatcher(None, q, c).ratio(),
-                        # Bonus: enthält einer den anderen?
-                        1.0 if q in c or c in q else 0.0,
-                        # Bonus: erstes Wort gleich?
-                        0.85 if q.split()[0] == c.split()[0] else 0.0,
-                    )
-                )
-                return scores
-
-            home_scores = _best_match_idx(vb_home, consensus["home_team"])
-            away_scores = _best_match_idx(vb_away, consensus["away_team"])
-            combined    = home_scores + away_scores
-
-            best_idx   = combined.idxmax()
-            best_score = combined[best_idx]
-
-            # Threshold: beide Teams müssen jeweils mindestens 0.5 matchen
-            if best_score < 1.0 or home_scores[best_idx] < 0.4 or away_scores[best_idx] < 0.4:
-                match_odds = pd.DataFrame()
-                st.warning(
-                    f"Spiel **{vb_home} vs {vb_away}** nicht in aktuellen Marktdaten gefunden.\n\n"
-                    f"Beste Übereinstimmung: "
-                    f"**{consensus.loc[best_idx, 'home_team']} vs {consensus.loc[best_idx, 'away_team']}** "
-                    f"(Score: {best_score:.2f}) — zu weit vom gesuchten Spiel."
-                )
+            if match_odds.empty:
+                st.warning(f"Spiel {vb_home} vs {vb_away} nicht in aktuellen Marktdaten. Spiel evtl. noch nicht gelistet.")
             else:
-                match_odds = consensus.iloc[[best_idx]]
-                found_home = consensus.loc[best_idx, "home_team"]
-                found_away = consensus.loc[best_idx, "away_team"]
-                if found_home != vb_home or found_away != vb_away:
-                    st.info(f"ℹ️ Gefunden als: **{found_home} vs {found_away}** (Odds-API Schreibweise)")
-
-            if not match_odds.empty:
                 mkt = match_odds.iloc[0]
                 detector = ValueBetDetector()
                 analysis = detector.analyze(
@@ -797,7 +785,7 @@ elif page == "💰 Value Bets":
                     margin=dict(t=30, b=10, l=40, r=10),
                     showlegend=False,
                 )
-                st.plotly_chart(fig_comp, width='stretch')
+                st.plotly_chart(fig_comp, use_container_width=True)
 
                 # ── Edge-Anzeige
                 ec1, ec2, ec3, ec4 = st.columns(4)
@@ -936,7 +924,7 @@ elif page == "📋 Feedback & Training":
             Auswärtssieg {selected_pred.prob_away_win:.1%}
         </div>''', unsafe_allow_html=True)
 
-        if st.button("✅ Ergebnis speichern", type="primary", width='stretch'):
+        if st.button("✅ Ergebnis speichern", type="primary", use_container_width=True):
             success = XGBoostFeedbackModel.enter_result(selected_id, int(home_goals), int(away_goals))
             if success:
                 actual = "H" if home_goals > away_goals else ("A" if home_goals < away_goals else "D")
@@ -969,7 +957,7 @@ elif page == "📋 Feedback & Training":
                 "Ergebnis":   f"{p.actual_home_goals}:{p.actual_away_goals}",
                 "Korrekt":    "✅" if p.prediction_correct else "❌",
             })
-        st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
     # ── XGBoost Training ────────────────────────────────────────────────────
     st.markdown('<p class="section-title">XGBoost Training</p>', unsafe_allow_html=True)
@@ -994,7 +982,7 @@ elif page == "📋 Feedback & Training":
             else:
                 st.markdown("<div style=\"background:#111827;border:1px solid #1e2d4a;border-radius:10px;padding:14px 20px;font-family:'DM Mono',monospace;font-size:0.82rem;color:#64748b;\">Modell noch nicht trainiert</div>", unsafe_allow_html=True)
         with tc2:
-            if st.button("🧠 Training starten", type="primary", width='stretch'):
+            if st.button("🧠 Training starten", type="primary", use_container_width=True):
                 with st.spinner("XGBoost trainiert..."):
                     result = xgb.train()
                 if result["success"]:
@@ -1050,7 +1038,7 @@ elif page == "📈 Data Explorer":
         legend=dict(font=dict(family="DM Mono", size=9, color="#94a3b8"), bgcolor="rgba(0,0,0,0)"),
         margin=dict(t=10, b=40, l=50, r=20),
     )
-    st.plotly_chart(fig_trend, width='stretch')
+    st.plotly_chart(fig_trend, use_container_width=True)
 
     # Result distribution pie
     rc1, rc2 = st.columns(2)
@@ -1068,7 +1056,7 @@ elif page == "📈 Data Explorer":
             legend=dict(font=dict(family="DM Mono", size=9, color="#94a3b8"), bgcolor="rgba(0,0,0,0)"),
             margin=dict(t=10, b=10, l=10, r=10),
         )
-        st.plotly_chart(fig_pie, width='stretch')
+        st.plotly_chart(fig_pie, use_container_width=True)
 
     with rc2:
         st.markdown('<p class="section-title">Tore-Verteilung</p>', unsafe_allow_html=True)
@@ -1089,7 +1077,7 @@ elif page == "📈 Data Explorer":
             legend=dict(font=dict(family="DM Mono", size=9, color="#94a3b8"), bgcolor="rgba(0,0,0,0)"),
             margin=dict(t=10, b=40, l=50, r=20),
         )
-        st.plotly_chart(fig_hist, width='stretch')
+        st.plotly_chart(fig_hist, use_container_width=True)
 
     with st.expander("Feature Matrix (letzte 20 Spiele)"):
         display_cols = ["date", "home_team", "away_team", "result",
@@ -1097,7 +1085,7 @@ elif page == "📈 Data Explorer":
                         "home_goals_scored_avg", "away_goals_scored_avg",
                         "position_diff", "h2h_home_win_rate"]
         available = [c for c in display_cols if c in df.columns]
-        st.dataframe(df[available].tail(20), width='stretch')
+        st.dataframe(df[available].tail(20), use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
