@@ -114,45 +114,74 @@ def predict(
     # Initiale Modifikatoren für Sofascore
     home_sofascore_penalty = 0.0
     away_sofascore_penalty = 0.0
+    home_sofascore_rating  = None
+    away_sofascore_rating  = None
     
     if home_sofascore_id and away_sofascore_id:
         match_id = sofascore.get_match_id(home_sofascore_id, away)
-        
+
+        home_starters = []
+        away_starters = []
+        modus = "C"
+
         if match_id:
-            match_ratings = sofascore.get_match_ratings(match_id)
-            
-            if match_ratings:
-                # DEBUGGING: Lass uns schauen, was wir von Sofascore bekommen!
-                log.info(f"DEBUG: Anzahl Spieler im Home-Team (Sofascore Lineup API): {len(match_ratings['home_team']['players'])}")
-                if match_ratings['home_team']['players']:
-                     log.info(f"DEBUG: Erstes Spieler-Objekt: {match_ratings['home_team']['players'][0]}")
+            # ── MODUS A: Bestätigte Live-Aufstellung ─────────────────────────
+            confirmed_ratings = sofascore.get_match_ratings(match_id)
+            if confirmed_ratings:
+                h_players = confirmed_ratings["home_team"]["players"]
+                a_players = confirmed_ratings["away_team"]["players"]
+                h_starters = [p for p in h_players if p.get("is_starter")]
+                a_starters = [p for p in a_players if p.get("is_starter")]
+                if len(h_starters) == 11 and confirmed_ratings.get("confirmed", False):
+                    home_starters = h_starters
+                    away_starters = a_starters
+                    modus = "A"
+                    log.info("✅ Modus A: Bestätigte Live-Aufstellung (11 Spieler)")
 
-                # Wir versuchen, die Starter zu finden (voraussichtlich oder bestätigt)
-                # Manchmal schickt Sofascore für "mögliche" Aufstellungen einfach die ersten 11 Spieler in der Liste,
-                # auch ohne is_starter flag.
-                
-                home_players = match_ratings["home_team"]["players"]
-                away_players = match_ratings["away_team"]["players"]
-                
-                home_starters = [p for p in home_players if p.get("is_starter")]
-                away_starters = [p for p in away_players if p.get("is_starter")]
-                
-                # Wenn wir keine 11 Spieler mit 'is_starter' haben, prüfen wir, ob wir überhaupt 
-                # genau 11 Spieler (z.B. als Predicted Lineup) bekommen haben
-                if len(home_starters) != 11 and len(home_players) >= 11:
-                     log.info("Nutze die ersten 11 Spieler als voraussichtliche Aufstellung (Predicted Lineup)")
-                     # Wir nehmen einfach die ersten 11 (die Startelf)
-                     home_starters = home_players[:11]
-                     away_starters = away_players[:11]
+            # ── MODUS B: Voraussichtliche Aufstellung ─────────────────────────
+            if modus != "A":
+                predicted_ratings = sofascore.get_predicted_match_ratings(match_id)
+                if predicted_ratings:
+                    h_players = predicted_ratings["home_team"]["players"]
+                    a_players = predicted_ratings["away_team"]["players"]
+                    h_starters = [p for p in h_players if p.get("is_starter")]
+                    a_starters = [p for p in a_players if p.get("is_starter")]
 
-                if len(home_starters) == 11:
-                    log.info("Aufstellung (voraussichtlich oder live) gefunden! Starte Modus A/B...")
-                else:
-                    log.info("Keine Match-Aufstellung verfügbar. Starte Modus C (Kader-Schnitt)...")
-                    
-                home_sofascore_penalty = sofascore.get_injured_player_impact(home_sofascore_id, home_missing_names, match_starters=home_starters)
-                away_sofascore_penalty = sofascore.get_injured_player_impact(away_sofascore_id, away_missing_names, match_starters=away_starters)
-                    
+                    # Fallback: erste 11 als Startelf wenn kein is_starter Flag
+                    if len(h_starters) < 11 and len(h_players) >= 11:
+                        h_starters = h_players[:11]
+                        a_starters = a_players[:11]
+
+                    if len(h_starters) >= 11:
+                        home_starters = h_starters[:11]
+                        away_starters = a_starters[:11]
+                        modus = "B"
+                        log.info("✅ Modus B: Voraussichtliche Aufstellung (11 Spieler)")
+                    else:
+                        log.info(f"Modus B: nur {len(h_starters)} Spieler gefunden — falle auf Modus C zurück")
+        else:
+            log.info("Kein Sofascore Match-ID gefunden — Modus C (Kader-Schnitt)")
+
+        if modus == "C":
+            log.info("✅ Modus C: Kein Spiel gefunden oder keine Aufstellung — nutze Kader-Schnitt")
+
+        home_ssc = sofascore.get_injured_player_impact(
+            home_sofascore_id, home_missing_names,
+            match_starters=home_starters if modus in ("A", "B") else None,
+        )
+        away_ssc = sofascore.get_injured_player_impact(
+            away_sofascore_id, away_missing_names,
+            match_starters=away_starters if modus in ("A", "B") else None,
+        )
+        home_sofascore_penalty = home_ssc["penalty"]
+        away_sofascore_penalty = away_ssc["penalty"]
+        home_sofascore_rating  = home_ssc["team_avg_rating"]
+        away_sofascore_rating  = away_ssc["team_avg_rating"]
+        if home_sofascore_penalty > 0:
+            log.info(f"Sofascore Gesamt-Penalty {home}: {home_sofascore_penalty:.2f}%")
+        if away_sofascore_penalty > 0:
+            log.info(f"Sofascore Gesamt-Penalty {away}: {away_sofascore_penalty:.2f}%")
+
     # Sofascore Penalty zum Transfermarkt Impact addieren
     home_total_impact = (home_impact or 0.0) + home_sofascore_penalty
     away_total_impact = (away_impact or 0.0) + away_sofascore_penalty
@@ -162,11 +191,19 @@ def predict(
     # 3. LIVE-FORM & WETTER
     # ---------------------------------------------------------
     form_calc = LiveFormCalculator()
-    # HIER WIRD AUCH DER NEUE TOTAL IMPACT ÜBERGEBEN
-    home_form = form_calc.get_lambda_adjustment(home, league=league, injury_impact=home_total_impact, features_df=df)
+    home_form = form_calc.get_lambda_adjustment(
+        home, league=league,
+        injury_impact=home_total_impact,
+        features_df=df,
+        sofascore_team_rating=home_sofascore_rating,
+    )
     form_calc.print_summary(home, home_form)
-    
-    away_form = form_calc.get_lambda_adjustment(away, league=league, injury_impact=away_total_impact, features_df=df)
+    away_form = form_calc.get_lambda_adjustment(
+        away, league=league,
+        injury_impact=away_total_impact,
+        features_df=df,
+        sofascore_team_rating=away_sofascore_rating,
+    )
     form_calc.print_summary(away, away_form)
 
     weather = WeatherCollector().get_match_weather(home)

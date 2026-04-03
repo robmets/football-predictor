@@ -48,12 +48,13 @@ class LiveFormCalculator:
         league: str = "BL1",
         injury_impact: float = 0.0,
         features_df=None,
+        sofascore_team_rating: float = None,
     ) -> dict:
         """
-        Berechnet den Gesamt-Lambda-Faktor aus unserer eigenen DB.
-        Kein externer API-Call — funktioniert immer.
+        Berechnet den Gesamt-Lambda-Faktor aus unserer eigenen DB + Sofascore.
 
-        Benutzt die letzten 5 Spiele aus features_df (oder lädt sie aus CSV).
+        sofascore_team_rating: Durchschnittliches Attribut-Rating (0-100 Skala).
+                               None = kein Sofascore verfügbar → Faktor 1.0
         """
         import pandas as pd
         import numpy as np
@@ -112,25 +113,40 @@ class LiveFormCalculator:
                 "points":     int(row["pts"]),
             })
 
-        # Form-Faktor berechnen
+        # Form-Faktor
         form_factor = 1.0 + (form_ppg - LEAGUE_AVG_PPG) / LEAGUE_AVG_PPG * 0.10
         form_factor = round(max(0.80, min(1.20, form_factor)), 3)
-        attack_factor = form_factor  # Nur Form, kein Rating-Faktor
+
+        # Rating-Faktor aus Sofascore (Attribut-Skala 0-100)
+        # Baseline 50 = neutrales Team. +5 Punkte → +5% Lambda, cap ±15%
+        SOFASCORE_BASELINE = 50.0
+        SOFASCORE_SENSITIVITY = 0.01  # 1% Lambda pro Attribut-Punkt
+        if sofascore_team_rating is not None:
+            rating_factor = 1.0 + (sofascore_team_rating - SOFASCORE_BASELINE) * SOFASCORE_SENSITIVITY
+            rating_factor = round(max(0.85, min(1.15, rating_factor)), 3)
+            log.info(
+                f"Sofascore Rating-Faktor {team_name}: "
+                f"{sofascore_team_rating:.1f} vs Basis {SOFASCORE_BASELINE} → ×{rating_factor:.3f}"
+            )
+        else:
+            rating_factor = 1.0
+
+        attack_factor = round(max(0.75, min(1.25, form_factor * rating_factor)), 3)
 
         result = {
             "attack_factor":      attack_factor,
             "form_ppg":           round(form_ppg, 3),
             "goals_scored_avg":   round(goals_scored_avg, 2),
             "goals_conceded_avg": round(goals_conceded_avg, 2),
-            "avg_player_rating":  None,
+            "avg_player_rating":  sofascore_team_rating,
             "top_players":        [],
             "source":             "local-db",
             "last_5":             last_5,
             "breakdown": {
-                "form_factor":  form_factor,
-                "rating_factor": 1.0,
+                "form_factor":   form_factor,
+                "rating_factor": rating_factor,
                 "injury_factor": round(1.0 - min(injury_impact / 100 * 0.5, 0.30), 3),
-                "combined":     attack_factor,
+                "combined":      attack_factor,
             }
         }
 
@@ -161,7 +177,7 @@ class LiveFormCalculator:
         print(f"  Tore kassiert:     Ø {adjustment['goals_conceded_avg']:.2f}/Spiel")
 
         if adjustment.get("avg_player_rating"):
-            print(f"  Ø Spieler-Rating:  {adjustment['avg_player_rating']:.2f} / 10")
+            print(f"  Ø Sofascore-Rating: {adjustment['avg_player_rating']:.1f} / 100")
 
         if adjustment["top_players"]:
             print(f"  Top-Spieler:")

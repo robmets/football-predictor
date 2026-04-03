@@ -6,11 +6,12 @@ from src.utils.logger import get_logger
 # Importiere deine lokalen Sofascore-Skripte
 from src.collectors.sofascore.search import search_team_on_sofascore
 from src.collectors.sofascore.teams import get_team_events, get_team_players
-from src.collectors.sofascore.matches import get_match_lineups_and_ratings
+from src.collectors.sofascore.matches import (
+    get_match_lineups_and_ratings,
+    get_predicted_lineups,
+    parse_player_ratings,
+)
 from src.collectors.sofascore.players import get_player_stats_and_attributes
-
-# Falls die parse_player_ratings in matches.py liegt:
-from src.collectors.sofascore.matches import parse_player_ratings
 
 log = get_logger(__name__)
 
@@ -52,24 +53,39 @@ class SofascoreCollector:
             log.error(f"Sofascore Match-Suche fehlgeschlagen: {e}")
             return None
 
-    def get_match_ratings(self, match_id: int) -> dict:
-        """Holt die Aufstellung und jagt sie direkt durch deinen Parser."""
+    def get_match_ratings(self, match_id: int) -> dict | None:
+        """
+        Holt Aufstellung für ein Spiel.
+        Gibt None zurück wenn gar keine Daten verfügbar.
+        """
         try:
-            raw_data = asyncio.run(get_match_lineups_and_ratings(match_id))
-            # Übergibt die Rohdaten an deinen Parser aus matches.py
-            parsed_data = parse_player_ratings(raw_data)
-            return parsed_data
+            return asyncio.run(get_match_lineups_and_ratings(match_id))
         except Exception as e:
-            log.error(f"Fehler beim Abrufen der Match-Ratings: {e}")
+            log.error(f"Fehler beim Abrufen der Match-Ratings (confirmed): {e}")
             return None
 
-    def get_injured_player_impact(self, team_id: int, missing_player_names: list, match_starters: list = None) -> float:
+    def get_predicted_match_ratings(self, match_id: int) -> dict | None:
         """
-        Nutzt die Match-Aufstellung (falls vorhanden) oder den Kader, um den 
-        wahren Team-Durchschnitt zu berechnen und Verletzte dagegen abzuwiegen.
+        Holt voraussichtliche Aufstellung (Modus B).
+        Funktioniert auch wenn Lineup noch nicht bestätigt.
+        """
+        try:
+            return asyncio.run(get_predicted_lineups(match_id))
+        except Exception as e:
+            log.error(f"Fehler beim Abrufen der Predicted Lineups: {e}")
+            return None
+
+    def get_injured_player_impact(self, team_id: int, missing_player_names: list, match_starters: list = None) -> dict:
+        """
+        Berechnet Sofascore-Impact für fehlende Spieler.
+        
+        Returns:
+            dict mit:
+              - penalty (float): Prozentpunkte (gleiche Skala wie Transfermarkt-Impact)
+              - team_avg_rating (float): Durchschnittliches Attribut-Rating des Teams (0-100)
         """
         if not missing_player_names:
-            return 0.0
+            return {"penalty": 0.0, "team_avg_rating": None}
             
         impact_penalty = 0.0
         
@@ -87,7 +103,7 @@ class SofascoreCollector:
                 
             if not roster:
                 log.warning("Konnte keine Spielerdaten laden!")
-                return 0.0
+                return {"penalty": 0.0, "team_avg_rating": None}
 
             # 2. DEN ECHTEN DURCHSCHNITT BERECHNEN
             team_attribute_scores = []
@@ -140,13 +156,18 @@ class SofascoreCollector:
                             # DAS DUELL: Verletzter Spieler vs. aktuelles Team
                             if player_avg > real_team_avg:
                                 diff = player_avg - real_team_avg
-                                penalty = diff * 0.005  # Strafe für überdurchschnittliche Ausfälle
+                                # Skala: diff=5 → 2.5 Prozentpunkte (vergleichbar mit Transfermarkt-Impact)
+                                penalty = diff * 0.5
                                 impact_penalty += penalty
-                                log.info(f"Sofascore Impact: {p_name} fehlt (Attribute Ø {player_avg:.1f} > Team-Ø {real_team_avg:.1f}) -> Penalty: -{penalty:.1%}")
+                                log.info(f"Sofascore Impact: {p_name} fehlt (Attribut Ø {player_avg:.1f} > Team-Ø {real_team_avg:.1f}) → Penalty: -{penalty:.2f}%")
                         else:
                             log.warning(f"Sofascore hat keine Attribute für {p_name} gefunden.")
                             
         except Exception as e:
             log.error(f"Fehler bei Impact-Berechnung: {e}")
-            
-        return impact_penalty
+            return {"penalty": 0.0, "team_avg_rating": None}
+
+        return {
+            "penalty": round(impact_penalty, 4),
+            "team_avg_rating": round(real_team_avg, 2) if team_attribute_scores else None,
+        }
