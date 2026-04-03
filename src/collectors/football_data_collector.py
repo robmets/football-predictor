@@ -7,6 +7,9 @@ Usage:
     collector.fetch_matches(league="BL1", seasons=5)
 """
 
+import json
+import os
+from pathlib import Path
 import time
 from datetime import datetime, date
 import requests
@@ -142,6 +145,62 @@ class FootballDataCollector:
             }
             for m in data.get("matches", [])
         ])
+
+    def get_live_standings(self, league_code: str) -> dict:
+        """
+        Holt die aktuelle Tabelle einer Liga. 
+        Nutzt einen lokalen Cache (1x am Tag abrufen schont die API).
+        """
+        import json
+        from pathlib import Path
+        from datetime import datetime
+        
+        # Welcher Wettbewerb? (Code übersetzen falls nötig)
+        fd_league_map = {"BL1": "BL1", "PL": "PL", "PD": "PD", "SA": "SA", "FL1": "FL1"}
+        comp_code = fd_league_map.get(league_code)
+        if not comp_code:
+            return {}
+
+        # Cache-Datei für heute
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        cache_dir = Path("data/cache/standings")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cache_dir / f"standings_{comp_code}_{today_str}.json"
+
+        # 1. Haben wir die Tabelle heute schon geladen?
+        if cache_file.exists():
+            log.info(f"Lade Tabelle für {comp_code} aus lokalem Tages-Cache...")
+            with open(cache_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+
+        # 2. Wenn nein: API anrufen! (Wir nutzen dein schlaues self._get)
+        log.info(f"API Call: Lade LIVE Tabelle für {comp_code} herunter...")
+        
+        try:
+            data = self._get(f"competitions/{comp_code}/standings")
+            
+            # Wir extrahieren nur die "TOTAL" Tabelle
+            standings_data = {}
+            for standing in data.get("standings", []):
+                if standing.get("type") == "TOTAL":
+                    for row in standing.get("table", []):
+                        team_name = row.get("team", {}).get("name")
+                        standings_data[team_name] = {
+                            "position": row.get("position"),
+                            "points": row.get("points"),
+                            "playedGames": row.get("playedGames"),
+                            "goalDifference": row.get("goalDifference")
+                        }
+            
+            # 3. Im Cache speichern
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(standings_data, f, ensure_ascii=False, indent=4)
+                
+            return standings_data
+            
+        except Exception as e:
+            log.error(f"Fehler beim Laden der Tabelle: {e}")
+            return {}
 
     # ── Private: Raw → DataFrame ─────────────────────────────────────────────
 

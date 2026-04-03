@@ -79,23 +79,25 @@ async def get_predicted_lineups(match_id: int) -> dict:
 
 
 def parse_player_ratings(data: dict) -> dict:
-    """
-    Parst Sofascore-Lineup-Daten.
-    Unterstützt bestätigte und voraussichtliche Aufstellungen.
-    """
     result = {
-        "confirmed": data.get("confirmed", False),
-        "home_team": {"team_live_rating": None, "team_season_rating": None, "players": []},
-        "away_team": {"team_live_rating": None, "team_season_rating": None, "players": []},
+        "home_team": { "team_live_rating": None, "team_season_rating": None, "players": [] },
+        "away_team": { "team_live_rating": None, "team_season_rating": None, "players": [] },
+        "confirmed": data.get("confirmed", False)
     }
-
+    
     for team_key in ["home", "away"]:
         team_data = data.get(team_key, {})
         dict_key = f"{team_key}_team"
-
+        
         starting_players = team_data.get("players", [])
-        bench_players    = team_data.get("bench", [])
-        all_players      = starting_players + bench_players
+        
+        # FALLBACK FÜR VORAUSSICHTLICHE AUFSTELLUNGEN
+        if not starting_players and "expected" in team_data:
+            starting_players = team_data.get("expected", [])
+            
+            
+        bench_players = team_data.get("bench", [])
+        all_players = starting_players + bench_players
 
         live_ratings_list   = []
         season_ratings_list = []

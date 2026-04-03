@@ -25,6 +25,8 @@ from src.features.live_form import LiveFormCalculator
 from config.config import config
 from src.models.xgboost_model import XGBoostFeedbackModel
 from src.collectors.sofascore_collector import SofascoreCollector
+from src.collectors.football_data_collector import FootballDataCollector
+from src.features.context_engine import ContextEngine
 
 log = get_logger("predict")
 app = typer.Typer()
@@ -178,33 +180,53 @@ def predict(
         home_sofascore_rating  = home_ssc["team_avg_rating"]
         away_sofascore_rating  = away_ssc["team_avg_rating"]
         if home_sofascore_penalty > 0:
-            log.info(f"Sofascore Gesamt-Penalty {home}: {home_sofascore_penalty:.2f}%")
+            log.info(f"Sofascore Gesamt-Penalty {home}: {home_sofascore_penalty * 100:.2f}%")
         if away_sofascore_penalty > 0:
-            log.info(f"Sofascore Gesamt-Penalty {away}: {away_sofascore_penalty:.2f}%")
+            log.info(f"Sofascore Gesamt-Penalty {away}: {away_sofascore_penalty * 100:.2f}%")
 
     # Sofascore Penalty zum Transfermarkt Impact addieren
     home_total_impact = (home_impact or 0.0) + home_sofascore_penalty
     away_total_impact = (away_impact or 0.0) + away_sofascore_penalty
 
+    # ---------------------------------------------------------
+    # 2.5 CONTEXT ENGINE (Tabellen, Motivation & Derbys)
+    # ---------------------------------------------------------
+    fd_collector = FootballDataCollector()
+    standings = fd_collector.get_live_standings(league)
+    
+    # Den aktuellen Spieltag live aus der Tabelle lesen (Spiele + 1)
+    matchday = 15
+    if standings and home in standings:
+        matchday = standings[home].get("playedGames", 14) + 1
+
+    ctx_engine = ContextEngine()
+    context = ctx_engine.calculate_context(home, away, league, matchday, standings)
 
     # ---------------------------------------------------------
     # 3. LIVE-FORM & WETTER
     # ---------------------------------------------------------
     form_calc = LiveFormCalculator()
     home_form = form_calc.get_lambda_adjustment(
-        home, league=league,
-        injury_impact=home_total_impact,
-        features_df=df,
-        sofascore_team_rating=home_sofascore_rating,
+        home, league=league, injury_impact=home_total_impact,
+        sofascore_team_rating=home_sofascore_rating, is_home=True
+    )
+    away_form = form_calc.get_lambda_adjustment(
+        away, league=league, injury_impact=away_total_impact,
+        sofascore_team_rating=away_sofascore_rating, is_home=False
     )
     form_calc.print_summary(home, home_form)
-    away_form = form_calc.get_lambda_adjustment(
-        away, league=league,
-        injury_impact=away_total_impact,
-        features_df=df,
-        sofascore_team_rating=away_sofascore_rating,
-    )
     form_calc.print_summary(away, away_form)
+
+    # NEU: Zeige die spezifische Form (Heim/Auswärts) an, bevor XGBoost sie nutzt!
+    log.info(f"📈 XGBoost Feature - Spezifische Form {home} (Heim): {home_form.get('specific_ppg', 0):.2f} PPG")
+    log.info(f"📈 XGBoost Feature - Spezifische Form {away} (Auswärts): {away_form.get('specific_ppg', 0):.2f} PPG")
+
+    # NEU: Zeige an, was die Context Engine berechnet hat!
+    log.info(f"🧠 Context Engine: Motivation-Boost {home}: ×{context['home_motivation']}")
+    log.info(f"🧠 Context Engine: Motivation-Boost {away}: ×{context['away_motivation']}")
+
+    home_form["attack_factor"] = round(home_form["attack_factor"] * context["home_motivation"], 3)
+    away_form["attack_factor"] = round(away_form["attack_factor"] * context["away_motivation"], 3)
 
     weather = WeatherCollector().get_match_weather(home)
     if weather["goal_impact_factor"] != 0:
@@ -238,6 +260,14 @@ def predict(
     
     result["home_form_ppg"] = home_form["form_ppg"]
     result["away_form_ppg"] = away_form["form_ppg"]
+
+    result["home_specific_ppg"] = home_form.get("specific_ppg", 1.5)
+    result["away_specific_ppg"] = away_form.get("specific_ppg", 1.5)
+
+    result["is_derby"] = context["is_derby"]
+    result["match_urgency"] = context["urgency"]
+    result["home_motivation"] = context["home_motivation"]
+    result["away_motivation"] = context["away_motivation"]
 
     # XGBoost Ensemble (falls Modell trainiert)
     xgb = XGBoostFeedbackModel()

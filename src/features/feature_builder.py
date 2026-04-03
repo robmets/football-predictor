@@ -68,6 +68,8 @@ class FeatureBuilder:
 
         home_form   = self._team_form(home, past, n=5)
         away_form   = self._team_form(away, past, n=5)
+        home_specific = self._team_form_specific(home, past, venue="home", n=5)
+        away_specific = self._team_form_specific(away, past, venue="away", n=5)
         home_stats  = self._goal_stats(home, past, n=10)
         away_stats  = self._goal_stats(away, past, n=10)
         h2h         = self._head_to_head(home, away, past, n=6)
@@ -98,6 +100,8 @@ class FeatureBuilder:
             "home_form_ppg":        home_form["ppg"],
             "away_form_ppg":        away_form["ppg"],
             "form_diff":            home_form["ppg"] - away_form["ppg"],
+            "home_form_ppg_specific": home_specific["ppg"],
+            "away_form_ppg_specific": away_specific["ppg"],
 
             # --- Goals scored ---
             "home_goals_scored_avg":    home_stats["scored_avg"],
@@ -154,6 +158,27 @@ class FeatureBuilder:
 
         if len(all_games) == 0:
             return {"ppg": 1.5, "games": 0}  # fallback = average
+
+        pts   = all_games["pts"].values
+        wts   = FORM_WEIGHTS[:len(pts)]
+        wts   = wts / wts.sum()
+        w_ppg = float(np.dot(pts, wts))
+
+        return {"ppg": w_ppg, "games": len(all_games)}
+
+    def _team_form_specific(self, team: str, past: pd.DataFrame, venue: str, n: int = 5) -> dict:
+        """Spezifische Form: Nur Heim- oder nur Auswärtsspiele."""
+        if venue == "home":
+            games = past[past["home_team"] == team].copy()
+            games["pts"] = games["result"].map({"H": 3, "D": 1, "A": 0})
+        else:
+            games = past[past["away_team"] == team].copy()
+            games["pts"] = games["result"].map({"A": 3, "D": 1, "H": 0})
+
+        all_games = games.sort_values("date", ascending=False).head(n)
+
+        if len(all_games) == 0:
+            return {"ppg": 1.5, "games": 0}  # Liga-Schnitt Fallback
 
         pts   = all_games["pts"].values
         wts   = FORM_WEIGHTS[:len(pts)]

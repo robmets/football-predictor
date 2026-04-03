@@ -35,22 +35,44 @@ class SofascoreCollector:
             return None
 
     def get_match_id(self, team_id: int, opponent_name: str) -> int:
-        """Sucht im Kalender nach dem Spiel gegen den bestimmten Gegner."""
+        """Sucht nach einem AKTUELLEN oder ZUKÜNFTIGEN Spiel gegen den Gegner."""
         try:
-            result = asyncio.run(get_team_events(team_id))
-            events = result.get("events", [])
+            import time
+            events = asyncio.run(get_team_events(team_id))
+            now = time.time()
+            
+            # Sicherheitscheck: Falls events ein Dict ist (z.B. Fehler-Antwort), machen wir eine leere Liste daraus
+            if isinstance(events, dict):
+                events = events.get("events", [])
+                
+            if not isinstance(events, list):
+                return None
             
             for event in events:
-                home_name = event.get("home_team", {}).get("name", "")
-                away_name = event.get("away_team", {}).get("name", "")
+                if not isinstance(event, dict):
+                    continue
+                    
+                h_name = event.get("home_team", {}).get("name", "")
+                a_name = event.get("away_team", {}).get("name", "")
                 
-                # Mapping: Ist der Transfermarkt-Gegnername ähnlich dem Sofascore-Namen?
-                if (difflib.SequenceMatcher(None, opponent_name.lower(), home_name.lower()).ratio() > 0.7 or 
-                    difflib.SequenceMatcher(None, opponent_name.lower(), away_name.lower()).ratio() > 0.7):
-                    return event.get("match_id")
-            return None
+                # Ist das der gesuchte Gegner?
+                if opponent_name in h_name or opponent_name in a_name or h_name in opponent_name or a_name in opponent_name:
+                    match_time = event.get("startTimestamp", 0)
+                    status = event.get("status", "")
+                    
+                    if status != "Ended" or (now - match_time) < (48 * 3600):
+                        return event.get("match_id") or event.get("id")
+                    else:
+                        log.info(f"Ignoriere altes Spiel aus der Vergangenheit: {h_name} vs {a_name} -> Erzwinge Modus C!")
+                        
+            return None # Kein aktuelles Spiel gefunden -> Modus C
+            
         except Exception as e:
-            log.error(f"Sofascore Match-Suche fehlgeschlagen: {e}")
+            log.error(f"Fehler bei der Match-Suche: {e}")
+            return None
+            
+        except Exception as e:
+            log.error(f"Fehler bei der Match-Suche: {e}")
             return None
 
     def get_match_ratings(self, match_id: int) -> dict | None:

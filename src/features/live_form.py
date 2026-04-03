@@ -49,6 +49,7 @@ class LiveFormCalculator:
         injury_impact: float = 0.0,
         features_df=None,
         sofascore_team_rating: float = None,
+        is_home: bool = True,  # <--- NEUER PARAMETER
     ) -> dict:
         """
         Berechnet den Gesamt-Lambda-Faktor aus unserer eigenen DB + Sofascore.
@@ -98,6 +99,14 @@ class LiveFormCalculator:
         form_ppg = float(np.dot(all_games["pts"].values, weights))
         goals_scored_avg   = float(all_games["scored"].mean())
         goals_conceded_avg = float(all_games["conceded"].mean())
+        specific_games = home_games if is_home else away_games
+        specific_games = specific_games.sort_values("date", ascending=False).head(5)
+        if len(specific_games) > 0:
+            w_spec = np.array([1.0, 0.85, 0.70, 0.55, 0.40][:len(specific_games)])
+            w_spec = w_spec / w_spec.sum()
+            specific_ppg = float(np.dot(specific_games["pts"].values, w_spec))
+        else:
+            specific_ppg = 1.5
 
         # Last 5 für Anzeige
         last_5 = []
@@ -136,6 +145,7 @@ class LiveFormCalculator:
         result = {
             "attack_factor":      attack_factor,
             "form_ppg":           round(form_ppg, 3),
+            "specific_ppg":       round(specific_ppg, 3),
             "goals_scored_avg":   round(goals_scored_avg, 2),
             "goals_conceded_avg": round(goals_conceded_avg, 2),
             "avg_player_rating":  sofascore_team_rating,
