@@ -11,11 +11,7 @@ from src.collectors.sofascore.matches import (
     get_predicted_lineups,
     parse_player_ratings,
 )
-
-
-
-
-
+from src.collectors.sofascore.players import get_player_stats_and_attributes
 
 log = get_logger(__name__)
 
@@ -61,35 +57,44 @@ class SofascoreCollector:
         """Holt die Aufstellung und jagt sie direkt durch deinen Parser."""
         try:
             raw_data = asyncio.run(get_match_lineups_and_ratings(match_id))
-            # Übergibt die Rohdaten an deinen Parser aus matches.py
             parsed_data = parse_player_ratings(raw_data)
             return parsed_data
         except Exception as e:
             log.error(f"Fehler beim Abrufen der Match-Ratings: {e}")
             return None
 
+    def get_predicted_match_ratings(self, match_id: int) -> dict | None:
+        """
+        Holt voraussichtliche Aufstellung (Modus B).
+        Funktioniert auch wenn Lineup noch nicht bestätigt.
+        """
+        try:
+            return asyncio.run(get_predicted_lineups(match_id))
+        except Exception as e:
+            log.error(f"Fehler beim Abrufen der Predicted Lineups: {e}")
+            return None
+
     def get_injured_player_impact(self, team_id: int, missing_player_names: list, match_starters: list = None) -> dict:
         """
         Berechnet Sofascore-Penalty für fehlende Spieler UND Team-Attribut-Rating.
+        Rating wird IMMER berechnet, auch wenn keine Spieler fehlen.
 
-        Wichtig: Team-Rating wird IMMER berechnet, auch wenn keine Spieler fehlen,
-        damit der Rating-Faktor in live_form.py symmetrisch auf beide Teams angewendet wird.
-
-        Returns:
-            dict mit:
-              - penalty (float): Prozentpunkte Verletzungs-Penalty
-              - team_avg_rating (float): Attribut-Rating 0-100 (50.0 wenn keine Daten)
+        Returns dict mit:
+          - penalty (float): Prozentpunkte Verletzungs-Penalty
+          - team_avg_rating (float): Attribut-Rating 0-100 (50.0 wenn keine Daten)
         """
         impact_penalty = 0.0
         team_attribute_scores = []
+        real_team_avg = 50.0  # Fallback: neutral
 
         try:
-            # === Roster bestimmen: Modus A/B (Aufstellung) oder C (Kader) ===
+            # === STUFE 1 & 2: Voraussichtliche oder Live-Aufstellung ===
             if match_starters and len(match_starters) == 11:
                 log.info("Nutze 11 Spieler aus der Match-Aufstellung für den Basis-Schnitt!")
                 roster = match_starters
                 core_players = roster
             else:
+                # === STUFE 3: Fallback auf den Kader ===
                 try:
                     team_data = asyncio.run(get_team_players(team_id))
                     roster = team_data.get("players", team_data.get("roster", []))
@@ -102,10 +107,13 @@ class SofascoreCollector:
                 log.warning(f"Keine Spielerdaten für Team {team_id} — neutrales Rating")
                 return {"penalty": 0.0, "team_avg_rating": 50.0}
 
-            # === Team-Attribut-Durchschnitt berechnen (immer, unabhängig von Verletzungen) ===
-            for player in core_players:
-                player_dict = player.get("player", player)
+            # 2. DEN ECHTEN DURCHSCHNITT BERECHNEN
+            team_attribute_scores = []
+            
+            for player in core_players: 
+                player_dict = player.get("player", player) # FIX: Egal ob verschachtelt oder flach!
                 p_id = player_dict.get("id")
+                
                 if p_id:
                     try:
                         stats = asyncio.run(get_player_stats_and_attributes(p_id))
@@ -115,58 +123,50 @@ class SofascoreCollector:
                             team_attribute_scores.append(sum(vals) / len(vals))
                     except Exception:
                         pass
-
-            # Fallback: 50.0 = neutral (kein Boost, kein Penalty im Rating-Faktor)
-            real_team_avg = (
-                sum(team_attribute_scores) / len(team_attribute_scores)
-                if team_attribute_scores else 50.0
-            )
+                        
+            real_team_avg = sum(team_attribute_scores) / len(team_attribute_scores) if team_attribute_scores else 68.0
             log.info(f"Dynamisches Team-Attribut-Rating berechnet: {real_team_avg:.1f}")
-
-            # === Verletzungs-Penalty (nur wenn Ausfälle vorhanden) ===
+            
+            # 3. VERLETZTE SPIELER ANALYSIEREN
             for missing_name in missing_player_names:
                 best_match = None
                 highest_ratio = 0.0
-
+                
                 for player in roster:
                     player_dict = player.get("player", player)
                     p_name = player_dict.get("name", "")
                     ratio = difflib.SequenceMatcher(None, missing_name.lower(), p_name.lower()).ratio()
+                    
                     if ratio > 0.75 and ratio > highest_ratio:
                         highest_ratio = ratio
                         best_match = player
-
+                
                 if best_match:
+                    # FIX: Holt sich sicher den Namen und die ID!
                     player_dict = best_match.get("player", best_match)
                     p_id = player_dict.get("id")
                     p_name = player_dict.get("name", "Unbekannt")
-
+                    
                     if p_id:
-                        try:
-                            stats = asyncio.run(get_player_stats_and_attributes(p_id))
-                            attrs = stats.get("attributes", {})
-                            vals = [v for v in attrs.values() if isinstance(v, (int, float))]
-                            if vals:
-                                player_avg = sum(vals) / len(vals)
-                                if player_avg > real_team_avg:
-                                    diff = player_avg - real_team_avg
-                                    # 0.5: diff=5 Punkte → 2.5 Prozentpunkte Penalty
-                                    penalty = diff * 0.5
-                                    impact_penalty += penalty
-                                    log.info(
-                                        f"Sofascore Impact: {p_name} fehlt "
-                                        f"(Attribut Ø {player_avg:.1f} > Team-Ø {real_team_avg:.1f}) "
-                                        f"→ Penalty: -{penalty:.2f}%"
-                                    )
-                            else:
-                                log.warning(f"Sofascore hat keine Attribute für {p_name} gefunden.")
-                        except Exception as e:
-                            log.warning(f"Attribut-Abruf für {p_name} fehlgeschlagen: {e}")
-
+                        stats = asyncio.run(get_player_stats_and_attributes(p_id))
+                        attrs = stats.get("attributes", {})
+                        vals = [v for v in attrs.values() if isinstance(v, (int, float))]
+                        
+                        if vals:
+                            player_avg = sum(vals) / len(vals)
+                            
+                            # DAS DUELL: Verletzter Spieler vs. aktuelles Team
+                            if player_avg > real_team_avg:
+                                diff = player_avg - real_team_avg
+                                penalty = diff * 0.5  # diff=5 Punkte → 2.5 Prozentpunkte
+                                impact_penalty += penalty
+                                log.info(f"Sofascore Impact: {p_name} fehlt (Attribute Ø {player_avg:.1f} > Team-Ø {real_team_avg:.1f}) -> Penalty: -{penalty:.1%}")
+                        else:
+                            log.warning(f"Sofascore hat keine Attribute für {p_name} gefunden.")
+                            
         except Exception as e:
             log.error(f"Fehler bei Impact-Berechnung: {e}")
-            return {"penalty": 0.0, "team_avg_rating": 50.0}
-
+            
         return {
             "penalty": round(impact_penalty, 4),
             "team_avg_rating": round(real_team_avg, 2) if team_attribute_scores else 50.0,

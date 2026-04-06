@@ -149,7 +149,7 @@ with st.sidebar:
     st.markdown("---")
     league = st.selectbox(
         "Liga",
-        options=["BL1", "PL", "PD", "SA", "FL1"],
+        options=["BL1", "PL", "PD", "SA", "FL1", "CL"],
         format_func=lambda x: config.SUPPORTED_LEAGUES.get(x, x),
     )
     sims = st.select_slider(
@@ -180,7 +180,7 @@ with st.sidebar:
         </p>''',
         unsafe_allow_html=True,
     )
-    if st.button("🔄 Neue Spiele laden", use_container_width=True):
+    if st.button("🔄 Neue Spiele laden", width='stretch'):
         with st.spinner("Aktualisiere Daten..."):
             try:
                 import pandas as _pd
@@ -288,7 +288,7 @@ if page == "🎯 Match Prediction":
         st.warning("Bitte zwei verschiedene Teams wählen.")
         st.stop()
 
-    run_btn = st.button("⚡ Simulation starten", type="primary", use_container_width=True)
+    run_btn = st.button("⚡ Simulation starten", type="primary", width='stretch')
 
     if run_btn:
         # ── Schritt 1: Verletzungen ─────────────────────────────────────────
@@ -460,11 +460,11 @@ if page == "🎯 Match Prediction":
         # ── 3 Gauges ────────────────────────────────────────────────────────
         g1, g2, g3 = st.columns(3)
         with g1:
-            st.plotly_chart(prob_gauge(result["prob_home_win"], f"HEIMSIEG\n{home_team[:18]}", "#4ade80"), use_container_width=True)
+            st.plotly_chart(prob_gauge(result["prob_home_win"], f"HEIMSIEG\n{home_team[:18]}", "#4ade80"), width='stretch')
         with g2:
-            st.plotly_chart(prob_gauge(result["prob_draw"], "UNENTSCHIEDEN", "#94a3b8"), use_container_width=True)
+            st.plotly_chart(prob_gauge(result["prob_draw"], "UNENTSCHIEDEN", "#94a3b8"), width='stretch')
         with g3:
-            st.plotly_chart(prob_gauge(result["prob_away_win"], f"AUSWÄRTSSIEG\n{away_team[:18]}", "#f87171"), use_container_width=True)
+            st.plotly_chart(prob_gauge(result["prob_away_win"], f"AUSWÄRTSSIEG\n{away_team[:18]}", "#f87171"), width='stretch')
 
         # ── Expected Goals & Markets ────────────────────────────────────────
         st.markdown('<p class="section-title">Erwartete Tore & Märkte</p>', unsafe_allow_html=True)
@@ -487,7 +487,7 @@ if page == "🎯 Match Prediction":
         st.markdown('<p class="section-title">Ergebnis-Wahrscheinlichkeiten</p>', unsafe_allow_html=True)
         hc1, hc2 = st.columns([3, 2])
         with hc1:
-            st.plotly_chart(score_heatmap(result.get("score_matrix", {}), home_team, away_team), use_container_width=True)
+            st.plotly_chart(score_heatmap(result.get("score_matrix", {}), home_team, away_team), width='stretch')
         with hc2:
             st.markdown("**Wahrscheinlichste Ergebnisse**")
             for i, s in enumerate(result["top_scores"][:8]):
@@ -551,7 +551,7 @@ elif page == "📊 Team Ratings":
         yaxis=dict(tickfont=dict(family="Inter", size=11, color="#e2e8f0"), autorange="reversed"),
         margin=dict(l=10, r=80, t=10, b=10),
     )
-    st.plotly_chart(fig_bar, use_container_width=True)
+    st.plotly_chart(fig_bar, width='stretch')
 
     st.markdown('<p class="section-title">Angriff vs Abwehr</p>', unsafe_allow_html=True)
     fig_scatter = go.Figure()
@@ -575,10 +575,10 @@ elif page == "📊 Team Ratings":
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="#0a0e1a",
         margin=dict(t=10, b=50, l=60, r=20),
     )
-    st.plotly_chart(fig_scatter, use_container_width=True)
+    st.plotly_chart(fig_scatter, width='stretch')
 
     with st.expander("Rohdaten anzeigen"):
-        st.dataframe(ratings.style.background_gradient(subset=["overall", "attack"], cmap="Blues"), use_container_width=True)
+        st.dataframe(ratings.style.background_gradient(subset=["overall", "attack"], cmap="Blues"), width='stretch')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -614,7 +614,7 @@ elif page == "💰 Value Bets":
     with vc3:
         vb_away = st.selectbox("✈️ Auswärtsmannschaft", all_teams, index=1, key="vb_away")
 
-    if st.button("🔍 Analysieren", type="primary", use_container_width=True) and vb_home != vb_away:
+    if st.button("🔍 Analysieren", type="primary", width='stretch') and vb_home != vb_away:
         with st.spinner("Modell + Odds laden..."):
             model = PoissonModel()
             model.fit(df)
@@ -732,7 +732,7 @@ elif page == "📋 Feedback & Training":
             Auswärtssieg {selected_pred.prob_away_win:.1%}
         </div>''', unsafe_allow_html=True)
 
-        if st.button("✅ Ergebnis speichern", type="primary", use_container_width=True):
+        if st.button("✅ Ergebnis speichern", type="primary", width='stretch'):
             success = XGBoostFeedbackModel.enter_result(selected_id, int(home_goals), int(away_goals))
             if success:
                 actual = "H" if home_goals > away_goals else ("A" if home_goals < away_goals else "D")
@@ -763,7 +763,7 @@ elif page == "📋 Feedback & Training":
                 "Ergebnis": f"{p.actual_home_goals}:{p.actual_away_goals}",
                 "Korrekt":  "✅" if p.prediction_correct else "❌",
             })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
     # ── XGBoost Training ─────────────────────────────────────────────────────
     st.markdown('<p class="section-title">XGBoost Training</p>', unsafe_allow_html=True)
@@ -785,7 +785,7 @@ elif page == "📋 Feedback & Training":
                     {xgb.n_training_samples} Samples
                 </div>''', unsafe_allow_html=True)
         with tc2:
-            if st.button("🧠 Training starten", type="primary", use_container_width=True):
+            if st.button("🧠 Training starten", type="primary", width='stretch'):
                 with st.spinner("XGBoost trainiert..."):
                     result = xgb.train()
                 if result["success"]:
@@ -826,7 +826,7 @@ elif page == "📋 Feedback & Training":
         if delete_ids:
             col_del, col_info = st.columns([2, 3])
             with col_del:
-                if st.button(f"🗑️ {len(delete_ids)} Vorhersage(n) löschen", type="primary", use_container_width=True):
+                if st.button(f"🗑️ {len(delete_ids)} Vorhersage(n) löschen", type="primary", width='stretch'):
                     session = get_session()
                     for del_id in delete_ids:
                         session.query(PredModel).filter(PredModel.id == del_id).delete()
@@ -887,7 +887,7 @@ elif page == "📈 Data Explorer":
         legend=dict(font=dict(family="DM Mono", size=9, color="#94a3b8"), bgcolor="rgba(0,0,0,0)"),
         margin=dict(t=10, b=40, l=50, r=20),
     )
-    st.plotly_chart(fig_trend, use_container_width=True)
+    st.plotly_chart(fig_trend, width='stretch')
 
     rc1, rc2 = st.columns(2)
     with rc1:
@@ -899,7 +899,7 @@ elif page == "📈 Data Explorer":
         fig_pie.update_layout(height=260, paper_bgcolor="rgba(0,0,0,0)",
                                legend=dict(font=dict(family="DM Mono", size=9, color="#94a3b8"), bgcolor="rgba(0,0,0,0)"),
                                margin=dict(t=10, b=10, l=10, r=10))
-        st.plotly_chart(fig_pie, use_container_width=True)
+        st.plotly_chart(fig_pie, width='stretch')
 
     with rc2:
         st.markdown('<p class="section-title">Tore-Verteilung</p>', unsafe_allow_html=True)
@@ -913,7 +913,7 @@ elif page == "📈 Data Explorer":
                                 yaxis=dict(gridcolor="#111827", tickfont=dict(family="DM Mono", size=9, color="#64748b")),
                                 legend=dict(font=dict(family="DM Mono", size=9, color="#94a3b8"), bgcolor="rgba(0,0,0,0)"),
                                 margin=dict(t=10, b=40, l=50, r=20))
-        st.plotly_chart(fig_hist, use_container_width=True)
+        st.plotly_chart(fig_hist, width='stretch')
 
     with st.expander("Feature Matrix (letzte 20 Spiele)"):
         display_cols = ["date", "home_team", "away_team", "result",
@@ -921,7 +921,7 @@ elif page == "📈 Data Explorer":
                         "home_goals_scored_avg", "away_goals_scored_avg",
                         "position_diff", "h2h_home_win_rate"]
         available = [c for c in display_cols if c in df.columns]
-        st.dataframe(df[available].tail(20), use_container_width=True)
+        st.dataframe(df[available].tail(20), width='stretch')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
