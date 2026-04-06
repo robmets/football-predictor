@@ -82,10 +82,22 @@ class PoissonModel:
             [(1.0, 2.0),]        # home advantage
         )
 
+        # --- Dixon-Coles Zeitgewichtung ---
+        # Neuere Spiele zählen mehr: exp(-xi * Tage)
+        # xi=0.003 → 1 Jahr altes Spiel hat Gewicht ~0.33
+
+        from datetime import date as _today_date
+        ref_date = pd.Timestamp(_today_date.today())
+        if "date" in df.columns:
+            df["_days_ago"] = (ref_date - pd.to_datetime(df["date"])).dt.days.clip(lower=0)
+            weights = np.exp(-0.003 * df["_days_ago"].values)
+        else:
+            weights = np.ones(len(df))
+
         result = minimize(
             fun=self._neg_log_likelihood,
             x0=x0,
-            args=(df, idx, n),
+            args=(df, idx, n, weights),
             method="L-BFGS-B",
             bounds=bounds,
             options={"maxiter": 500, "ftol": 1e-9},
@@ -108,27 +120,27 @@ class PoissonModel:
         return self
 
     @staticmethod
-    def _neg_log_likelihood(params, df, idx, n):
-        """Negative log-likelihood for home/away goals under Poisson."""
-        attack  = params[:n]
-        defence = params[n:2*n]
+    def _neg_log_likelihood(params, df, idx, n, weights=None):
+        """Negative log-likelihood for home/away goals under Poisson.
+        weights: array of per-match time decay weights (Dixon-Coles).
+        """
+        attack   = params[:n]
+        defence  = params[n:2*n]
         home_adv = params[2*n]
 
         log_lik = 0.0
-        for _, row in df.iterrows():
+        for i, (_, row) in enumerate(df.iterrows()):
             hi = idx.get(row["home_team"])
             ai = idx.get(row["away_team"])
             if hi is None or ai is None:
                 continue
 
-            lambda_h = attack[hi] * defence[ai] * home_adv
-            lambda_a = attack[ai] * defence[hi]
+            lambda_h = max(attack[hi] * defence[ai] * home_adv, 1e-6)
+            lambda_a = max(attack[ai] * defence[hi], 1e-6)
 
-            lambda_h = max(lambda_h, 1e-6)
-            lambda_a = max(lambda_a, 1e-6)
-
-            log_lik += poisson.logpmf(int(row["home_goals"]), lambda_h)
-            log_lik += poisson.logpmf(int(row["away_goals"]), lambda_a)
+            w = weights[i] if weights is not None else 1.0
+            log_lik += w * poisson.logpmf(int(row["home_goals"]), lambda_h)
+            log_lik += w * poisson.logpmf(int(row["away_goals"]), lambda_a)
 
         return -log_lik
 

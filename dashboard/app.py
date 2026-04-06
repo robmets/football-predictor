@@ -362,8 +362,8 @@ if page == "🎯 Match Prediction":
             home_total_impact = home_inj + home_sofascore_penalty
             away_total_impact = away_inj + away_sofascore_penalty
 
-        # ── Schritt 3: Form, Context, Wetter ───────────────────────────────
-        with st.spinner("3/4 · Live-Form · Tabelle · Wetter..."):
+        # ── Schritt 3: Form, H2H, Context, Wetter ─────────────────────────
+        with st.spinner("3/4 · Live-Form · H2H · Tabelle · Wetter..."):
             form_calc = LiveFormCalculator()
             home_form = form_calc.get_lambda_adjustment(
                 home_team, league=league,
@@ -377,6 +377,9 @@ if page == "🎯 Match Prediction":
                 sofascore_team_rating=away_sofascore_rating,
                 is_home=False, features_df=df,
             )
+
+            # H2H über ALLE Wettbewerbe (z.B. La Liga + CL für Atletico vs Barcelona)
+            h2h = form_calc.get_h2h_factor(home_team, away_team, league, features_df=df)
 
             try:
                 from src.collectors.football_data_collector import FootballDataCollector as _FDC2
@@ -405,6 +408,8 @@ if page == "🎯 Match Prediction":
                 weather_impact=weather["goal_impact_factor"],
                 home_form_factor=home_form["attack_factor"],
                 away_form_factor=away_form["attack_factor"],
+                h2h_factor=h2h["factor"],
+                h2h_games=h2h["games"],
             )
             poisson_pred = model.predict(home_team, away_team)
 
@@ -421,6 +426,9 @@ if page == "🎯 Match Prediction":
             result["match_urgency"]      = context["urgency"]
             result["home_motivation"]    = context["home_motivation"]
             result["away_motivation"]    = context["away_motivation"]
+            result["h2h_factor"]         = h2h["factor"]
+            result["h2h_games"]          = h2h["games"]
+            result["h2h_home_win_rate"]  = h2h["home_win_rate"]
 
             # XGBoost Ensemble (falls trainiert)
             xgb = XGBoostFeedbackModel()
@@ -435,13 +443,20 @@ if page == "🎯 Match Prediction":
         derby_badge = " 🔥 DERBY" if result.get("is_derby") else ""
         home_boost = f" ×{result.get('home_motivation', 1.0):.3f}" if result.get("home_motivation", 1.0) > 1.01 else ""
         away_boost = f" ×{result.get('away_motivation', 1.0):.3f}" if result.get("away_motivation", 1.0) > 1.01 else ""
-        
+
         sofascore_badge = ""
         if home_sofascore_rating or away_sofascore_rating:
             modus_label = {"A": "Live-Aufstellung", "B": "Predicted Lineup", "C": "Kader-Schnitt"}.get(modus, modus)
             h_r = f"{home_sofascore_rating:.1f}" if home_sofascore_rating else "—"
             a_r = f"{away_sofascore_rating:.1f}" if away_sofascore_rating else "—"
             sofascore_badge = f" · Sofascore {modus_label}: Ø {h_r} / {a_r}"
+
+        # H2H Badge
+        h2h_badge = ""
+        if result.get("h2h_games", 0) >= 3:
+            h2h_rate  = result["h2h_home_win_rate"]
+            h2h_g     = result["h2h_games"]
+            h2h_badge = f" · H2H ({h2h_g} Duelle): {home_team} gewinnt {h2h_rate:.0%}"
 
         st.markdown(f"""
         <div class="matchup-header">
@@ -452,7 +467,7 @@ if page == "🎯 Match Prediction":
             </div>
             <div style="margin-top:12px;font-family:'DM Mono',monospace;font-size:0.72rem;color:#475569;">
                 {sims:,} Simulationen · Konfidenz: {result['confidence']} · Favorit: {result['favourite']}
-                {sofascore_badge} · Vorhersage-ID: #{pred_id}
+                {sofascore_badge}{h2h_badge} · Vorhersage-ID: #{pred_id}
             </div>
         </div>
         """, unsafe_allow_html=True)

@@ -41,6 +41,8 @@ class MonteCarloSimulator:
         weather_impact: float = 0.0,
         home_form_factor: float = 1.0,
         away_form_factor: float = 1.0,
+        h2h_factor: float = 1.0,
+        h2h_games: int = 0,
     ) -> dict:
         """
         Simulate a match N times and return aggregated probabilities.
@@ -62,13 +64,23 @@ class MonteCarloSimulator:
 
         lambda_h, lambda_a = self.model._expected_goals(home_team, away_team)
 
-        # ── Apply live form factor (api-football Form + Spieler-Ratings) ────
+        # ── Apply live form factor ───────────────────────────────────────────
         if home_form_factor != 1.0:
             lambda_h = lambda_h * home_form_factor
             log.info(f"Live-Form {home_team}: ×{home_form_factor:.3f} → λ={lambda_h:.2f}")
         if away_form_factor != 1.0:
             lambda_a = lambda_a * away_form_factor
             log.info(f"Live-Form {away_team}: ×{away_form_factor:.3f} → λ={lambda_a:.2f}")
+
+        # ── H2H-Faktor (direkte Vergleiche, alle Wettbewerbe) ───────────────
+        if h2h_factor != 1.0 and h2h_games >= 3:
+            # Heimteam historisch dominant → Lambda-Boost home, leichte Reduktion away
+            lambda_h = lambda_h * h2h_factor
+            lambda_a = lambda_a * (2.0 - h2h_factor)  # invers, aber gedeckelt durch ±8%
+            log.info(
+                f"H2H-Faktor ({h2h_games} Duelle): {home_team} ×{h2h_factor:.3f} → λ_h={lambda_h:.2f}, "
+                f"{away_team} ×{2.0-h2h_factor:.3f} → λ_a={lambda_a:.2f}"
+            )
 
         # ── Apply injury penalty to attack strength ──────────────────────────
         INJURY_SENSITIVITY = 0.5
