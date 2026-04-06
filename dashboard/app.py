@@ -765,6 +765,57 @@ elif page == "📋 Feedback & Training":
             })
         st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
+        # ── Ergebnis bearbeiten ──────────────────────────────────────────────
+        st.markdown('<p class="section-title">Ergebnis korrigieren</p>', unsafe_allow_html=True)
+        edit_options = {
+            f"ID {p.id} | {str(p.created_at)[:10]} | {p.home_team} vs {p.away_team} [{p.actual_home_goals}:{p.actual_away_goals}]": p.id
+            for p in past
+        }
+        edit_label = st.selectbox("Vorhersage zum Korrigieren auswählen", options=list(edit_options.keys()), key="edit_select")
+        edit_id = edit_options[edit_label]
+        edit_pred = next(p for p in past if p.id == edit_id)
+
+        ec1, ec2, ec3 = st.columns([4, 1, 4])
+        with ec1:
+            edit_home = st.number_input(
+                f"🏠 {edit_pred.home_team[:25]} — Tore (korrigiert)",
+                min_value=0, max_value=20,
+                value=int(edit_pred.actual_home_goals) if edit_pred.actual_home_goals is not None else 0,
+                step=1, key="edit_hg"
+            )
+        with ec2:
+            st.markdown("<br><div style='text-align:center;font-size:1.5rem'>:</div>", unsafe_allow_html=True)
+        with ec3:
+            edit_away = st.number_input(
+                f"✈️ {edit_pred.away_team[:25]} — Tore (korrigiert)",
+                min_value=0, max_value=20,
+                value=int(edit_pred.actual_away_goals) if edit_pred.actual_away_goals is not None else 0,
+                step=1, key="edit_ag"
+            )
+
+        if st.button("✏️ Ergebnis korrigieren", width='stretch'):
+            session = get_session()
+            pred_to_edit = session.query(PredModel).filter_by(id=edit_id).first()
+            if pred_to_edit:
+                actual = "H" if edit_home > edit_away else ("A" if edit_home < edit_away else "D")
+                pred_to_edit.actual_home_goals  = int(edit_home)
+                pred_to_edit.actual_away_goals  = int(edit_away)
+                pred_to_edit.actual_result      = actual
+                pred_to_edit.prediction_correct = (pred_to_edit.predicted_winner == actual)
+                session.commit()
+                correct = pred_to_edit.prediction_correct
+                session.close()
+                color = "#4ade80" if correct else "#f87171"
+                icon  = "✅" if correct else "❌"
+                st.markdown(f'''<div style="background:#0c1e0c;border:1px solid #166534;border-radius:10px;
+                    padding:14px 20px;color:{color};font-family:'DM Mono',monospace;font-size:0.9rem;">
+                    {icon} Ergebnis korrigiert: {edit_home}:{edit_away}
+                    — Prognose war {"RICHTIG" if correct else "FALSCH"}
+                </div>''', unsafe_allow_html=True)
+                st.rerun()
+            else:
+                session.close()
+
     # ── XGBoost Training ─────────────────────────────────────────────────────
     st.markdown('<p class="section-title">XGBoost Training</p>', unsafe_allow_html=True)
     MIN_SAMPLES = 10
