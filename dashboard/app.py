@@ -288,13 +288,49 @@ if page == "🎯 Match Prediction":
         st.warning("Bitte zwei verschiedene Teams wählen.")
         st.stop()
 
+    # ── CL/EL Stage-Selektor ────────────────────────────────────────────────
+    manual_matchday = None
+    if league in ("CL", "EL", "UECL"):
+        CL_STAGES = {
+            "🏆 Gruppenphase / Ligaphase":        -1,
+            "🔵 Round of 16 — Hinspiel":           9,
+            "🔵 Round of 16 — Rückspiel":          10,
+            "🟡 Viertelfinale — Hinspiel":          11,
+            "🟡 Viertelfinale — Rückspiel":         12,
+            "🟠 Halbfinale — Hinspiel":             13,
+            "🟠 Halbfinale — Rückspiel":            14,
+            "🔴 Finale":                            15,
+        }
+        EL_STAGES = {
+            "🏆 Gruppenphase / Ligaphase":        None,
+            "🔵 Round of 16 — Hinspiel":           7,
+            "🔵 Round of 16 — Rückspiel":          8,
+            "🟡 Viertelfinale — Hinspiel":          9,
+            "🟡 Viertelfinale — Rückspiel":         10,
+            "🟠 Halbfinale — Hinspiel":             11,
+            "🟠 Halbfinale — Rückspiel":            12,
+            "🔴 Finale":                            13,
+        }
+        stages = CL_STAGES if league == "CL" else EL_STAGES
+        league_label = {"CL": "Champions League", "EL": "Europa League", "UECL": "Conference League"}.get(league, league)
+        selected_stage = st.selectbox(
+            f"🏆 {league_label} — Runde",
+            options=list(stages.keys()),
+            index=0,
+            help="Wichtig für Knockout-Motivation! Gruppenphase gibt keinen Extra-Boost.",
+        )
+        manual_matchday = stages[selected_stage]
+
     run_btn = st.button("⚡ Simulation starten", type="primary", width='stretch')
 
     if run_btn:
         # ── Schritt 1: Verletzungen ─────────────────────────────────────────
         with st.spinner("1/4 · Verletzungsanalyse (Transfermarkt)..."):
-            model = PoissonModel()
-            model.fit(df)
+            # Gecachtes Modell nutzen — wird nur beim ersten Klick (oder nach Update) gefittet
+            model = get_fitted_model(league)
+            if model is None:
+                st.error("Modell konnte nicht gefittet werden.")
+                st.stop()
 
             _h_inj = calculate_missing_impact(home_team)
             _a_inj = calculate_missing_impact(away_team)
@@ -388,10 +424,16 @@ if page == "🎯 Match Prediction":
                 standings = {}
 
             ctx_engine = ContextEngine()
-            matchday = 20
-            if standings and home_team in standings:
-                matchday = standings[home_team].get("playedGames", 19) + 1
-            context = ctx_engine.calculate_context(home_team, away_team, league, matchday, standings)
+            # manual_matchday: None = keine CL/EL Auswahl, -1 = Gruppenphase, 9-15 = KO
+            if manual_matchday is not None and manual_matchday > 0:
+                _matchday = manual_matchday  # explizite KO-Runde ausgewählt
+            elif manual_matchday == -1:
+                _matchday = 4  # Ligaphase: sicher unter KO-Schwelle (< 9)
+            else:
+                _matchday = 20
+                if standings and home_team in standings:
+                    _matchday = standings[home_team].get("playedGames", 19) + 1
+            context = ctx_engine.calculate_context(home_team, away_team, league, _matchday, standings)
 
             home_form["attack_factor"] = round(home_form["attack_factor"] * context["home_motivation"], 3)
             away_form["attack_factor"] = round(away_form["attack_factor"] * context["away_motivation"], 3)
