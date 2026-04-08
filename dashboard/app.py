@@ -429,6 +429,8 @@ if page == "🎯 Match Prediction":
             result["h2h_factor"]         = h2h["factor"]
             result["h2h_games"]          = h2h["games"]
             result["h2h_home_win_rate"]  = h2h["home_win_rate"]
+            result["knockout_stage"]     = context.get("knockout_stage")
+            result["is_knockout"]        = context.get("is_knockout", False)
 
             # XGBoost Ensemble (falls trainiert)
             xgb = XGBoostFeedbackModel()
@@ -440,7 +442,10 @@ if page == "🎯 Match Prediction":
             result["prediction_id"] = pred_id
 
         # ── Matchup Header ──────────────────────────────────────────────────
+        is_knockout = result.get("is_knockout", False)
+        knockout_stage = result.get("knockout_stage", "")
         derby_badge = " 🔥 DERBY" if result.get("is_derby") else ""
+        knockout_badge = f" 🏆 {knockout_stage.upper()}" if is_knockout and knockout_stage else ""
         home_boost = f" ×{result.get('home_motivation', 1.0):.3f}" if result.get("home_motivation", 1.0) > 1.01 else ""
         away_boost = f" ×{result.get('away_motivation', 1.0):.3f}" if result.get("away_motivation", 1.0) > 1.01 else ""
 
@@ -462,7 +467,7 @@ if page == "🎯 Match Prediction":
         <div class="matchup-header">
             <div style="display:flex;justify-content:space-between;align-items:center;">
                 <div class="team-name">{home_team}<span style="font-size:0.9rem;color:#fbbf24">{home_boost}</span></div>
-                <div><span class="vs-badge">VS{derby_badge}</span></div>
+                <div><span class="vs-badge">VS{derby_badge}{knockout_badge}</span></div>
                 <div class="team-name">{away_team}<span style="font-size:0.9rem;color:#fbbf24">{away_boost}</span></div>
             </div>
             <div style="margin-top:12px;font-family:'DM Mono',monospace;font-size:0.72rem;color:#475569;">
