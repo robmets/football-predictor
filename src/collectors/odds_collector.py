@@ -18,11 +18,19 @@ log = get_logger(__name__)
 
 # football-data league code → Odds API sport key
 LEAGUE_TO_SPORT = {
+    # Tier 1
     "BL1": "soccer_germany_bundesliga",
     "PL":  "soccer_epl",
     "PD":  "soccer_spain_la_liga",
     "SA":  "soccer_italy_serie_a",
     "FL1": "soccer_france_ligue_one",
+    # Tier 2
+    "BL2": "soccer_germany_bundesliga2",
+    "ELC": "soccer_efl_champ",
+    "SD":  "soccer_spain_segunda_division",
+    "SB":  "soccer_italy_serie_b",
+    "FL2": "soccer_france_ligue_two",
+    # Europa
     "CL":  "soccer_uefa_champs_league",
     "EL":  "soccer_uefa_europa_league",
     "UECL": "soccer_uefa_europa_conference_league",

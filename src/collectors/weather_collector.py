@@ -127,6 +127,56 @@ TEAM_CITY = {
     "Le Havre AC":                "Le Havre,FR",
     "Angers SCO":                 "Angers,FR",
     "AJ Auxerre":                 "Auxerre,FR",
+    # 2. Bundesliga (BL2)
+    "Hertha BSC":                 "Berlin,DE",
+    "FC Schalke 04":              "Gelsenkirchen,DE",
+    "Fortuna Düsseldorf":         "Düsseldorf,DE",
+    "Hannover 96":                "Hannover,DE",
+    "Karlsruher SC":              "Karlsruhe,DE",
+    "SC Paderborn 07":            "Paderborn,DE",
+    "1. FC Nürnberg":             "Nuremberg,DE",
+    "1. FC Kaiserslautern":       "Kaiserslautern,DE",
+    "Eintracht Braunschweig":     "Braunschweig,DE",
+    "1. FC Magdeburg":            "Magdeburg,DE",
+    
+    # Championship (ELC)
+    "Leeds United FC":            "Leeds,GB",
+    "Sunderland AFC":             "Sunderland,GB",
+    "Sheffield United FC":        "Sheffield,GB",
+    "West Bromwich Albion FC":    "West Bromwich,GB",
+    "Burnley FC":                 "Burnley,GB",
+    "Middlesbrough FC":           "Middlesbrough,GB",
+    "Norwich City FC":            "Norwich,GB",
+    "Coventry City FC":           "Coventry,GB",
+    "Watford FC":                 "Watford,GB",
+    "Luton Town FC":              "Luton,GB",
+    
+    # Segunda División (SD)
+    "UD Almería":                 "Almeria,ES",
+    "Granada CF":                 "Granada,ES",
+    "Cádiz CF":                   "Cadiz,ES",
+    "Levante UD":                 "Valencia,ES",
+    "Real Oviedo":                "Oviedo,ES",
+    "Real Sporting de Gijón":     "Gijon,ES",
+    "Elche CF":                   "Elche,ES",
+    "Real Zaragoza":              "Zaragoza,ES",
+    
+    # Serie B (SB)
+    "Frosinone Calcio":           "Frosinone,IT",
+    "US Salernitana 1919":        "Salerno,IT",
+    "UC Sampdoria":               "Genoa,IT",
+    "Palermo FC":                 "Palermo,IT",
+    "SSC Bari":                   "Bari,IT",
+    "Brescia Calcio":             "Brescia,IT",
+    "US Cremonese":               "Cremona,IT",
+    
+    # Ligue 2 (FL2)
+    "FC Metz":                    "Metz,FR",
+    "FC Lorient":                 "Lorient,FR",
+    "Clermont Foot 63":           "Clermont-Ferrand,FR",
+    "Paris FC":                   "Paris,FR",
+    "En Avant Guingamp":          "Guingamp,FR",
+    "SM Caen":                    "Caen,FR",
 }
 
 # Weather impact factors on expected goals

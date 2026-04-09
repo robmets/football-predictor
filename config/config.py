@@ -35,12 +35,22 @@ class Config:
 
     # --- Leagues supported (football-data.org codes) ---
     SUPPORTED_LEAGUES: dict = {
+        # Tier 1
         "BL1": "Bundesliga",
         "PL":  "Premier League",
         "PD":  "La Liga",
         "SA":  "Serie A",
         "FL1": "Ligue 1",
+        # Tier 2
+        "BL2": "2. Bundesliga",
+        "ELC": "Championship",
+        "SD":  "Segunda División",
+        "SB":  "Serie B",
+        "FL2": "Ligue 2",
+        # Europa
         "CL":  "Champions League",
+        "EL":  "Europa League",
+        "UECL": "Conference League",
     }
 
 

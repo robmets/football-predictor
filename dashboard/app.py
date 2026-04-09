@@ -199,7 +199,7 @@ with st.sidebar:
     st.markdown("---")
     league = st.selectbox(
         "Liga",
-        options=["BL1", "PL", "PD", "SA", "FL1", "CL"],
+        options=["BL1", "PL", "PD", "SA", "FL1", "CL", "EL", "UECL", "BL2", "ELC", "SD", "SB", "FL2"],
         format_func=lambda x: config.SUPPORTED_LEAGUES.get(x, x),
     )
     sims = st.select_slider(
