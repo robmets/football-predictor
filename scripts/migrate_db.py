@@ -34,19 +34,23 @@ def migrate():
     else:
         log.info("teams.transfermarkt_id bereits vorhanden")
 
-    # ── Predictions: alte Tabelle löschen & neu erstellen ────────────────────
-    # Prüfe ob die neue Struktur schon existiert
-    if not column_exists(cur, "predictions", "home_team"):
-        log.info("Predictions-Tabelle wird neu erstellt (alte Daten gehen verloren)...")
-        cur.execute("DROP TABLE IF EXISTS predictions")
-        log.info("Alte predictions Tabelle gelöscht")
-    else:
-        log.info("predictions Tabelle hat bereits neue Struktur")
+    # ── Predictions: Phase 3 Spalten (Wett-Tipps) hinzufügen ─────────────────
+    if not column_exists(cur, "predictions", "recommended_bets"):
+        cur.execute("ALTER TABLE predictions ADD COLUMN recommended_bets TEXT")
+        log.success("predictions.recommended_bets hinzugefügt")
+        
+    if not column_exists(cur, "predictions", "actual_over_2_5"):
+        cur.execute("ALTER TABLE predictions ADD COLUMN actual_over_2_5 INTEGER") # SQLite nutzt INTEGER für Boolean
+        log.success("predictions.actual_over_2_5 hinzugefügt")
+        
+    if not column_exists(cur, "predictions", "actual_btts"):
+        cur.execute("ALTER TABLE predictions ADD COLUMN actual_btts INTEGER")
+        log.success("predictions.actual_btts hinzugefügt")
 
     conn.commit()
     conn.close()
 
-    # Neue Tabellen via SQLAlchemy erstellen
+    # Neue Tabellen via SQLAlchemy sicherheitshalber initiieren
     init_db(DB_PATH)
     log.success("Migration abgeschlossen!")
     log.info("Alle Teams und Spiele sind erhalten.")

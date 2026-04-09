@@ -15,7 +15,7 @@ from datetime import datetime
 
 from src.models.poisson_model import PoissonModel
 from src.simulation.monte_carlo import MonteCarloSimulator
-from src.utils.database import get_session, Match, Team
+from src.utils.database import get_session, Match, Team, Prediction
 from config.config import config
 from src.collectors.odds_collector import OddsCollector
 from src.models.xgboost_model import XGBoostFeedbackModel
@@ -95,6 +95,56 @@ html, body, [class*="css"] {
     letter-spacing: 0.15em; text-transform: uppercase;
     border-bottom: 1px solid #1e2d4a; padding-bottom: 8px; margin: 24px 0 16px;
 }
+
+.tip-card {
+    background: linear-gradient(135deg, #1a1f35 0%, #0f1628 100%);
+    border: 1px solid #2d4a6e;
+    border-radius: 12px;
+    padding: 20px;
+    margin: 12px 0;
+}
+.tip-top {
+    border-color: #fbbf24;
+    box-shadow: 0 0 20px rgba(251, 191, 36, 0.3);
+}
+.tip-header {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    margin-bottom: 12px;
+}
+.tip-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid #1e2d4a;
+}
+.tip-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.8rem;
+    color: #64748b;
+}
+.tip-value {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: #e2e8f0;
+}
+.tip-edge {
+    color: #4ade80;
+    font-weight: 700;
+}
+.tip-explanation {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #1e2d4a;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.85rem;
+    color: #94a3b8;
+    font-style: italic;
+}
+
 #MainMenu, footer { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
@@ -527,6 +577,64 @@ if page == "🎯 Match Prediction":
             st.plotly_chart(prob_gauge(result["prob_draw"], "UNENTSCHIEDEN", "#94a3b8"), width='stretch')
         with g3:
             st.plotly_chart(prob_gauge(result["prob_away_win"], f"AUSWÄRTSSIEG\n{away_team[:18]}", "#f87171"), width='stretch')
+
+        with st.spinner("💰 Analysiere Wettmärkte & berechne Value Bets..."):
+            from src.features.bet_recommender import BetRecommender
+            import json
+            
+            odds_data = OddsCollector().fetch_all_markets_cached(league)
+            
+            if odds_data and not odds_data['h2h'].empty:
+                # Hier kannst du die Filter-Strenge jederzeit anpassen
+                recommender = BetRecommender(min_edge=5.0, min_confidence="MEDIUM")
+                tips = recommender.analyze_markets(result, odds_data, home_team, away_team)
+                
+                if tips:
+                    st.markdown('<p class="section-title">💰 Empfohlene Wetten (Value Bets)</p>', unsafe_allow_html=True)
+                    
+                    # Speichere Tipps in der Datenbank für das Performance-Tracking
+                    session = get_session()
+                    pred_db = session.query(Prediction).filter_by(id=pred_id).first()
+                    if pred_db:
+                        pred_db.recommended_bets = json.dumps(tips)
+                        session.commit()
+                    session.close()
+                    
+                    # Zeige die Top 3 Tipps an
+                    for i, tip in enumerate(tips[:3]):
+                        st.markdown(f"""
+                        <div class="tip-card {'tip-top' if i == 0 else ''}">
+                            <div class="tip-header">
+                                {'🏆 TOP-TIPP:' if i == 0 else '⭐ VALUE-TIPP:'} {tip['recommendation']}
+                            </div>
+                            <div class="tip-body">
+                                <div class="tip-row">
+                                    <span class="tip-label">Modell-Wahrscheinlichkeit:</span>
+                                    <span class="tip-value">{tip['model_prob']:.1%}</span>
+                                </div>
+                                <div class="tip-row">
+                                    <span class="tip-label">Beste Quote:</span>
+                                    <span class="tip-value">{tip['best_odds']:.2f} ({tip['bookmaker']})</span>
+                                </div>
+                                <div class="tip-row">
+                                    <span class="tip-label">Edge (Value):</span>
+                                    <span class="tip-value tip-edge">+{tip['edge_pct']:.1f} PP</span>
+                                </div>
+                                <div class="tip-row">
+                                    <span class="tip-label">Empfohlener Einsatz (Half-Kelly):</span>
+                                    <span class="tip-value">{tip['kelly_stake_pct']:.1f}% Bankroll</span>
+                                </div>
+                                <div class="tip-explanation">
+                                    💡 {tip['explanation']}
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.info("ℹ️ Keine Tipps mit ausreichendem Value gefunden für dieses Spiel.")
+            else:
+                st.warning("⚠️ Keine aktuellen Quoten verfügbar für dieses Spiel (z.B. API-Limit oder Spiel liegt zu weit in der Zukunft).")
+        #  ══════════════════════════════════════════════════════════════════
 
         # ── Expected Goals & Markets ────────────────────────────────────────
         st.markdown('<p class="section-title">Erwartete Tore & Märkte</p>', unsafe_allow_html=True)

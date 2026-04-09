@@ -250,8 +250,9 @@ class XGBoostFeedbackModel:
 
     @staticmethod
     def enter_result(prediction_id: int, home_goals: int, away_goals: int) -> bool:
-        """Trägt das echte Ergebnis nach dem Spiel ein."""
+        """Trägt das echte Ergebnis nach dem Spiel ein und wertet Wett-Tipps aus."""
         from datetime import datetime as dt
+        import json
 
         def _res(h, a):
             if h > a: return "H"
@@ -266,12 +267,48 @@ class XGBoostFeedbackModel:
             session.close()
             return False
 
+        # 1. Standard-Ergebnis eintragen
         actual = _res(home_goals, away_goals)
         pred.actual_home_goals  = home_goals
         pred.actual_away_goals  = away_goals
         pred.actual_result      = actual
         pred.result_entered_at  = dt.now()
         pred.prediction_correct = (pred.predicted_winner == actual)
+
+        # 2. NEU: Market-Outcomes berechnen (Phase 3)
+        total_goals = home_goals + away_goals
+        pred.actual_over_2_5 = bool(total_goals > 2.5)
+        pred.actual_btts = bool(home_goals > 0 and away_goals > 0)
+
+        # 3. NEU: Tipp-Performance auswerten
+        if pred.recommended_bets:
+            try:
+                tips = json.loads(pred.recommended_bets)
+                for tip in tips:
+                    market = tip.get('market', '')
+                    odds = tip.get('best_odds', 1.0)
+                    won = False
+
+                    # Auswertung je nach Markt
+                    if 'h2h_home' in market: won = (actual == 'H')
+                    elif 'h2h_draw' in market: won = (actual == 'D')
+                    elif 'h2h_away' in market: won = (actual == 'A')
+                    elif 'over_2_5' in market: won = pred.actual_over_2_5
+                    elif 'under_2_5' in market: won = not pred.actual_over_2_5
+                    elif 'over_3_5' in market: won = (total_goals > 3.5)
+                    elif 'under_3_5' in market: won = (total_goals <= 3.5)
+                    elif 'btts_yes' in market: won = pred.actual_btts
+                    elif 'btts_no' in market: won = not pred.actual_btts
+
+                    tip['won'] = won
+                    # Profitberechnung: Einsatz = 1 Einheit. Gewinn = Quote - 1, Verlust = -1
+                    tip['profit_loss'] = round((odds - 1.0) if won else -1.0, 2)
+
+                # Aktualisierte Tipps zurück in die Datenbank schreiben
+                pred.recommended_bets = json.dumps(tips)
+                log.info(f"Tipps für ID {prediction_id} erfolgreich ausgewertet.")
+            except Exception as e:
+                log.error(f"Fehler beim Auswerten der Tipps für ID {prediction_id}: {e}")
 
         session.commit()
         correct = pred.prediction_correct

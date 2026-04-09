@@ -78,6 +78,9 @@ class Prediction(Base):
     actual_result        = Column(String)
     result_entered_at    = Column(DateTime)
     prediction_correct   = Column(Boolean)
+    recommended_bets     = Column(String)  
+    actual_over_2_5      = Column(Boolean) 
+    actual_btts          = Column(Boolean) 
 
 
 # ── Engine & Session ─────────────────────────────────────────────────────────
