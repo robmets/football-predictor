@@ -94,7 +94,7 @@ def parse_player_ratings(data: dict) -> dict:
         # FALLBACK FÜR VORAUSSICHTLICHE AUFSTELLUNGEN
         if not starting_players and "expected" in team_data:
             starting_players = team_data.get("expected", [])
-            
+            result["confirmed"] = False  # <--- NEU: Es ist nur 'expected', also nicht bestätigt!
             
         bench_players = team_data.get("bench", [])
         all_players = starting_players + bench_players

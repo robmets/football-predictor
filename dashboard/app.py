@@ -192,7 +192,7 @@ with st.sidebar:
 
     page = st.radio(
         "Navigation",
-        ["🎯 Match Prediction", "📊 Team Ratings", "💰 Value Bets", "📋 Feedback & Training", "📈 Data Explorer", "ℹ️ About"],
+        ["🎯 Match Prediction", "📊 Team Ratings", "💰 Value Bets", "📋 Feedback & Training", "📈 Data Explorer", "🤑 Performance & Gewinn" , "ℹ️ About"],
         label_visibility="collapsed",
     )
 
@@ -578,21 +578,19 @@ if page == "🎯 Match Prediction":
         with g3:
             st.plotly_chart(prob_gauge(result["prob_away_win"], f"AUSWÄRTSSIEG\n{away_team[:18]}", "#f87171"), width='stretch')
 
-        with st.spinner("💰 Analysiere Wettmärkte & berechne Value Bets..."):
+        with st.spinner("Analysiere Wettmärkte und berechne Empfehlungen..."):
             from src.features.bet_recommender import BetRecommender
             import json
             
             odds_data = OddsCollector().fetch_all_markets_cached(league)
             
             if odds_data and not odds_data['h2h'].empty:
-                # Hier kannst du die Filter-Strenge jederzeit anpassen
                 recommender = BetRecommender(min_edge=5.0, min_confidence="MEDIUM")
                 tips = recommender.analyze_markets(result, odds_data, home_team, away_team)
                 
                 if tips:
-                    st.markdown('<p class="section-title">💰 Empfohlene Wetten (Value Bets)</p>', unsafe_allow_html=True)
+                    st.markdown('<p class="section-title">Empfohlene Wetten</p>', unsafe_allow_html=True)
                     
-                    # Speichere Tipps in der Datenbank für das Performance-Tracking
                     session = get_session()
                     pred_db = session.query(Prediction).filter_by(id=pred_id).first()
                     if pred_db:
@@ -600,40 +598,39 @@ if page == "🎯 Match Prediction":
                         session.commit()
                     session.close()
                     
-                    # Zeige die Top 3 Tipps an
                     for i, tip in enumerate(tips[:3]):
                         st.markdown(f"""
                         <div class="tip-card {'tip-top' if i == 0 else ''}">
                             <div class="tip-header">
-                                {'🏆 TOP-TIPP:' if i == 0 else '⭐ VALUE-TIPP:'} {tip['recommendation']}
+                                {'HAUPT-TIPP:' if i == 0 else 'WEITERER TIPP:'} {tip['recommendation']}
                             </div>
                             <div class="tip-body">
                                 <div class="tip-row">
-                                    <span class="tip-label">Modell-Wahrscheinlichkeit:</span>
+                                    <span class="tip-label">Unsere berechnete Chance:</span>
                                     <span class="tip-value">{tip['model_prob']:.1%}</span>
                                 </div>
                                 <div class="tip-row">
-                                    <span class="tip-label">Beste Quote:</span>
+                                    <span class="tip-label">Quote beim Buchmacher:</span>
                                     <span class="tip-value">{tip['best_odds']:.2f} ({tip['bookmaker']})</span>
                                 </div>
                                 <div class="tip-row">
-                                    <span class="tip-label">Edge (Value):</span>
-                                    <span class="tip-value tip-edge">+{tip['edge_pct']:.1f} PP</span>
+                                    <span class="tip-label">Risiko-Einschätzung:</span>
+                                    <span class="tip-value">{tip['risk_level']}</span>
                                 </div>
                                 <div class="tip-row">
-                                    <span class="tip-label">Empfohlener Einsatz (Half-Kelly):</span>
-                                    <span class="tip-value">{tip['kelly_stake_pct']:.1f}% Bankroll</span>
+                                    <span class="tip-label">Empfohlener Einsatz:</span>
+                                    <span class="tip-value tip-edge">{tip['stake_text']}</span>
                                 </div>
                                 <div class="tip-explanation">
-                                    💡 {tip['explanation']}
+                                    Grund: {tip['explanation']}
                                 </div>
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
                 else:
-                    st.info("ℹ️ Keine Tipps mit ausreichendem Value gefunden für dieses Spiel.")
+                    st.info("Aktuell gibt es keine Tipps mit ausreichendem Vorteil für dieses Spiel.")
             else:
-                st.warning("⚠️ Keine aktuellen Quoten verfügbar für dieses Spiel (z.B. API-Limit oder Spiel liegt zu weit in der Zukunft).")
+                st.warning("Keine aktuellen Quoten verfügbar für dieses Spiel.")
         #  ══════════════════════════════════════════════════════════════════
 
         # ── Expected Goals & Markets ────────────────────────────────────────
@@ -964,17 +961,15 @@ elif page == "📋 Feedback & Training":
             )
 
         if st.button("✏️ Ergebnis korrigieren", width='stretch'):
-            session = get_session()
-            pred_to_edit = session.query(PredModel).filter_by(id=edit_id).first()
-            if pred_to_edit:
-                actual = "H" if edit_home > edit_away else ("A" if edit_home < edit_away else "D")
-                pred_to_edit.actual_home_goals  = int(edit_home)
-                pred_to_edit.actual_away_goals  = int(edit_away)
-                pred_to_edit.actual_result      = actual
-                pred_to_edit.prediction_correct = (pred_to_edit.predicted_winner == actual)
-                session.commit()
+            # Nutze die zentrale XGBoost Funktion, damit Tipps direkt mit ausgewertet werden!
+            success = XGBoostFeedbackModel.enter_result(edit_id, int(edit_home), int(edit_away))
+            
+            if success:
+                session = get_session()
+                pred_to_edit = session.query(PredModel).filter_by(id=edit_id).first()
                 correct = pred_to_edit.prediction_correct
                 session.close()
+                
                 color = "#4ade80" if correct else "#f87171"
                 icon  = "✅" if correct else "❌"
                 st.markdown(f'''<div style="background:#0c1e0c;border:1px solid #166534;border-radius:10px;
@@ -983,8 +978,6 @@ elif page == "📋 Feedback & Training":
                     — Prognose war {"RICHTIG" if correct else "FALSCH"}
                 </div>''', unsafe_allow_html=True)
                 st.rerun()
-            else:
-                session.close()
 
     # ── XGBoost Training ─────────────────────────────────────────────────────
     st.markdown('<p class="section-title">XGBoost Training</p>', unsafe_allow_html=True)
@@ -1143,6 +1136,161 @@ elif page == "📈 Data Explorer":
                         "position_diff", "h2h_home_win_rate"]
         available = [c for c in display_cols if c in df.columns]
         st.dataframe(df[available].tail(20), width='stretch')
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE: PERFORMANCE & GEWINN 
+# ══════════════════════════════════════════════════════════════════════════════
+
+elif page == "🤑 Performance & Gewinn":  
+    st.markdown('<p class="dashboard-header">Deine Gewinn-Uebersicht</p>', unsafe_allow_html=True)
+    st.markdown("Hier siehst du, wie sich dein Kontostand entwickelt haette, wenn du auf jeden unserer Haupt-Tipps **10 Euro** gesetzt haettest.")
+    st.markdown("---")
+    
+    session = get_session()
+    
+    # --- TEIL 1: AKTUELL OFFENE TIPPS ---
+    st.markdown('<p class="section-title">Aktuell Offene Tipps (Noch nicht gespielt)</p>', unsafe_allow_html=True)
+    
+    # Filtern: Spiele OHNE Ergebnis, aber MIT gespeicherten Tipps
+    open_preds = session.query(Prediction).filter(
+        Prediction.actual_result.is_(None), 
+        Prediction.recommended_bets.isnot(None)
+    ).order_by(Prediction.created_at.desc()).all()
+    
+    if not open_preds:
+        st.info("Aktuell hast du keine offenen Tipps. Simuliere neue Spiele auf der Vorhersage-Seite.")
+    else:
+        import json
+        import pandas as pd
+        
+        open_tips_data = []
+        for p in open_preds:
+            try:
+                tips = json.loads(p.recommended_bets)
+                if tips and len(tips) > 0:
+                    top_tip = tips[0]
+                    open_tips_data.append({
+                        'Datum': p.created_at.strftime('%d.%m.%Y %H:%M'),
+                        'Spiel': f"{p.home_team} vs {p.away_team}",
+                        'Dein Tipp': top_tip.get('recommendation', 'Unbekannt'),
+                        'Quote': f"{top_tip.get('best_odds', 1.0):.2f}",
+                        'Risiko': top_tip.get('risk_level', 'Unbekannt'),
+                        'Einsatz': "10.00 Euro"
+                    })
+            except Exception:
+                continue
+                
+        if open_tips_data:
+            df_open = pd.DataFrame(open_tips_data)
+            st.dataframe(df_open, width='stretch', hide_index=True)
+            
+    st.markdown("---")
+    
+    # --- TEIL 2: AUSGEWERTETE TIPPS & GEWINN ---
+    st.markdown('<p class="section-title">Bereits Ausgewertete Tipps</p>', unsafe_allow_html=True)
+    
+    # Filtern: Spiele MIT Ergebnis und MIT gespeicherten Tipps
+    preds = session.query(Prediction).filter(
+        Prediction.actual_result.isnot(None), 
+        Prediction.recommended_bets.isnot(None)
+    ).all()
+    session.close()
+    
+    if not preds:
+        st.info("Noch keine ausgewerteten Tipps vorhanden. Trage unter 'Ergebnisse eintragen' zuerst die echten Ergebnisse vergangener Spiele ein.")
+    else:
+        import plotly.express as px
+        
+        all_tips = []
+        for p in preds:
+            try:
+                tips = json.loads(p.recommended_bets)
+                if tips:
+                    for tip in tips[:2]:
+                        # Automatisches Nachberechnen von alten Spielen
+                        if 'won' not in tip and p.actual_result is not None:
+                            market = tip.get('market', '')
+                            odds = tip.get('best_odds', 1.0)
+                            
+                            total_goals = (p.actual_home_goals or 0) + (p.actual_away_goals or 0)
+                            btts = ((p.actual_home_goals or 0) > 0 and (p.actual_away_goals or 0) > 0)
+                            
+                            if 'h2h_home' in market: won = (p.actual_result == 'H')
+                            elif 'h2h_draw' in market: won = (p.actual_result == 'D')
+                            elif 'h2h_away' in market: won = (p.actual_result == 'A')
+                            elif 'over_2_5' in market: won = (total_goals > 2.5)
+                            elif 'under_2_5' in market: won = (total_goals <= 2.5)
+                            elif 'over_3_5' in market: won = (total_goals > 3.5)
+                            elif 'under_3_5' in market: won = (total_goals <= 3.5)
+                            elif 'btts_yes' in market: won = btts
+                            elif 'btts_no' in market: won = not btts
+                            else: won = False
+                            
+                            tip['won'] = won
+                            tip['profit_loss'] = round((odds - 1.0) if won else -1.0, 2)
+                            
+                        if 'won' in tip and 'profit_loss' in tip:
+                            all_tips.append({
+                                'date': p.created_at,
+                                'match': f"{p.home_team} vs {p.away_team}",
+                                'tip': tip.get('recommendation', 'Unbekannt'),
+                                'odds': tip.get('best_odds', 1.0),
+                                'won': tip['won'],
+                                'profit_loss_units': tip['profit_loss']
+                            })
+            except Exception:
+                continue
+        
+        if not all_tips:
+            st.info("Es konnten noch keine Gewinne berechnet werden.")
+        else:
+            df_tips = pd.DataFrame(all_tips).sort_values('date')
+            
+            # Berechnung mit 10 Euro Einsatz
+            df_tips['gewinn_euro'] = df_tips['profit_loss_units'] * 10.0
+            df_tips['kontostand'] = 100.0 + df_tips['gewinn_euro'].cumsum()
+            
+            total_gewinn = df_tips['gewinn_euro'].sum()
+            richtige = len(df_tips[df_tips['won'] == True])
+            falsche = len(df_tips[df_tips['won'] == False])
+            
+            col1, col2, col3 = st.columns(3)
+            
+            def kpi_card(col, label, value, color_class=""):
+                col.markdown(f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value {color_class}">{value}</div></div>', unsafe_allow_html=True)
+                
+            color = "green" if total_gewinn > 0 else ("red" if total_gewinn < 0 else "")
+            kpi_card(col1, "Dein Reingewinn", f"{total_gewinn:+.2f} Euro", color)
+            kpi_card(col2, "Richtige Tipps", richtige, "blue")
+            kpi_card(col3, "Falsche Tipps", falsche, "amber")
+            
+            st.markdown("---")
+            
+            st.markdown("**Entwicklung deines Kontostands (Startkapital: 100 Euro)**")
+            fig = px.line(
+                df_tips, 
+                x='date', 
+                y='kontostand', 
+                markers=True
+            )
+            fig.update_layout(
+                xaxis_title="Datum", 
+                yaxis_title="Kontostand in Euro",
+                template="plotly_dark",
+                margin=dict(l=0, r=0, t=30, b=0)
+            )
+            fig.update_traces(line_color="#4ade80")
+            st.plotly_chart(fig, width='stretch')
+            
+            st.markdown("**Alle gespielten Tipps im Detail**")
+            display_df = df_tips[['date', 'match', 'tip', 'odds', 'won', 'gewinn_euro']].copy()
+            display_df['date'] = display_df['date'].dt.strftime('%d.%m.%Y')
+            display_df.columns = ["Datum", "Spiel", "Dein Tipp", "Quote", "Gewonnen?", "Gewinn/Verlust"]
+            display_df["Gewonnen?"] = display_df["Gewonnen?"].map({True: "Ja", False: "Nein"})
+            display_df["Gewinn/Verlust"] = display_df["Gewinn/Verlust"].apply(lambda x: f"{x:+.2f} Euro")
+            
+            st.dataframe(display_df, width='stretch', hide_index=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
