@@ -1200,7 +1200,7 @@ elif page == "🤑 Performance & Gewinn":
                 
         if open_tips_data:
             df_open = pd.DataFrame(open_tips_data)
-            st.dataframe(df_open, use_container_width=True, hide_index=True)
+            st.dataframe(df_open, width='stretch', hide_index=True)
             
     st.markdown("---")
     
@@ -1305,7 +1305,7 @@ elif page == "🤑 Performance & Gewinn":
                 margin=dict(l=0, r=0, t=30, b=0)
             )
             fig.update_traces(line_color="#4ade80")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
             
             st.markdown("**Alle Tipps (Gespielt & Ungespielt)**")
             display_df = df_tips[['date', 'match', 'prio', 'tip', 'played', 'stake', 'odds', 'won', 'gewinn_euro']].copy()
@@ -1315,7 +1315,7 @@ elif page == "🤑 Performance & Gewinn":
             display_df["Dein Einsatz"] = display_df["Dein Einsatz"].apply(lambda x: f"{x:.2f} €")
             display_df["Gewinn/Verlust"] = display_df["Gewinn/Verlust"].apply(lambda x: f"{x:+.2f} €")
             
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            st.dataframe(display_df, width='stretch', hide_index=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
