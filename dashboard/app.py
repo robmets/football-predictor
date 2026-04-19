@@ -900,14 +900,6 @@ elif page == "📋 Feedback & Training":
         selected_id = pred_options[selected_label]
         selected_pred = next(p for p in open_predictions if p.id == selected_id)
 
-        fc1, fc2, fc3 = st.columns([4, 1, 4])
-        with fc1:
-            home_goals = st.number_input(f"🏠 {selected_pred.home_team[:25]} — Tore", min_value=0, max_value=20, value=0, step=1, key="hg")
-        with fc2:
-            st.markdown("<br><div style='text-align:center;font-size:1.5rem'>:</div>", unsafe_allow_html=True)
-        with fc3:
-            away_goals = st.number_input(f"✈️ {selected_pred.away_team[:25]} — Tore", min_value=0, max_value=20, value=0, step=1, key="ag")
-
         st.markdown(f'''<div style="background:#0a0e1a;border:1px solid #1e2d4a;border-radius:10px;
             padding:12px 20px;font-family:'DM Mono',monospace;font-size:0.8rem;color:#64748b;margin:8px 0;">
             Prognose: Heimsieg {selected_pred.prob_home_win:.1%} |
@@ -928,11 +920,6 @@ elif page == "📋 Feedback & Training":
                 st.markdown("<br><div style='text-align:center;font-size:1.5rem'>:</div>", unsafe_allow_html=True)
             with fc3:
                 away_goals = st.number_input(f"✈️ {selected_pred.away_team[:25]} — Tore", min_value=0, max_value=20, value=0, step=1)
-
-            st.markdown(f'''<div style="background:#0a0e1a;border:1px solid #1e2d4a;border-radius:10px;
-                padding:12px 20px;font-family:'DM Mono',monospace;font-size:0.8rem;color:#64748b;margin:8px 0;">
-                Prognose: Heimsieg {selected_pred.prob_home_win:.1%} | Unentschieden {selected_pred.prob_draw:.1%} | Auswärtssieg {selected_pred.prob_away_win:.1%}
-            </div>''', unsafe_allow_html=True)
 
             user_inputs = []
             if tips_data:
