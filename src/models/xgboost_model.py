@@ -74,23 +74,38 @@ class XGBoostFeedbackModel:
 
         X, y = self._build_features(df)
 
-        # Train/Test Split (letzte 20% als Test)
-        split = int(len(X) * 0.8)
-        X_train, X_test = X[:split], X[split:]
-        y_train, y_test = y[:split], y[split:]
+        # Fix 3: Stratified Shuffle Split statt chronologischem Split
+        # → H/D/A gleichmäßig in Train und Test verteilt
+        # → verhindert dass Zeitraum-Bias die Accuracy killt
+        from sklearn.model_selection import StratifiedShuffleSplit
+        sss = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+        train_idx, test_idx = next(sss.split(X, y))
+        X_train, X_test = X[train_idx], X[test_idx]
+        y_train, y_test = y[train_idx], y[test_idx]
 
+        # Fix 1: Class Weights — Unentschieden wird stärker gewichtet
+        # weil es am schwersten zu treffen ist
+        from collections import Counter
+        y_counts = Counter(y_train.tolist())
+        total = len(y_train)
+        sample_weights = np.array([
+            total / (3 * y_counts[label]) for label in y_train
+        ])
+
+        # Fix 2: use_label_encoder entfernt, max_depth reduziert, learning_rate kleiner
+        # → weniger Overfitting bei wenig Daten
         self.model = XGBClassifier(
             n_estimators=100,
-            max_depth=4,
-            learning_rate=0.1,
+            max_depth=3,
+            learning_rate=0.05,
             subsample=0.8,
             colsample_bytree=0.8,
             random_state=42,
             eval_metric="mlogloss",
-            use_label_encoder=False,
         )
         self.model.fit(
             X_train, y_train,
+            sample_weight=sample_weights,
             eval_set=[(X_test, y_test)],
             verbose=False,
         )
@@ -114,7 +129,7 @@ class XGBoostFeedbackModel:
         result = {
             "success":          True,
             "n_samples":        len(df),
-            "train_size":       split,
+            "train_size":       len(train_idx),
             "test_size":        len(X_test),
             "accuracy":         round(self.accuracy, 3),
             "top_features":     top_features,
@@ -209,15 +224,17 @@ class XGBoostFeedbackModel:
         """Speichert eine Vorhersage in der DB. Gibt die ID zurück."""
         from datetime import datetime as dt
 
-        def _res(h, a):
-            if h > a: return "H"
-            if h < a: return "A"
-            return "D"
-
-        pred_result = _res(
-            result.get("expected_home_goals", 1),
-            result.get("expected_away_goals", 1)
-        )
+        # predicted_winner basiert auf höchster Wahrscheinlichkeit — nicht auf xG
+        # Damit kann "D" auch tatsächlich als Vorhersage gespeichert werden
+        prob_h = result.get("prob_home_win", 0)
+        prob_d = result.get("prob_draw", 0)
+        prob_a = result.get("prob_away_win", 0)
+        if prob_d > prob_h and prob_d > prob_a:
+            pred_result = "D"
+        elif prob_h >= prob_a:
+            pred_result = "H"
+        else:
+            pred_result = "A"
 
         session = get_session()
         p = Prediction(
