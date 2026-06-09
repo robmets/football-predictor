@@ -59,14 +59,25 @@ def parse_market_value(value_str) -> int:
 
 def _wc_national_team_impact(team_name: str):
     """
-    WC national team injury fallback via Transfermarkt national team search.
-    Uses player-search approach since club-API doesn't serve national squads.
+    WC national team injury impact via Transfermarkt.
+    Nutzt gespeicherte TM-ID aus DB (wenn vorhanden via map_wc_teams.py),
+    sonst dynamische Suche.
     Returns (impact_pct, missing_names) — graceful 0.0 fallback on any error.
     """
     try:
         collector = TransfermarktCollector()
-        # Search for national team players via country name
-        players = collector.get_national_team_players(team_name)
+
+        # Prefer DB-stored TM ID (set by map_wc_teams.py)
+        session = get_session()
+        team_obj = session.query(Team).filter_by(name=team_name, league="WC").first()
+        session.close()
+        tm_id = team_obj.transfermarkt_id if team_obj else None
+
+        if tm_id:
+            players = collector.get_club_players(tm_id)
+        else:
+            players = collector.get_national_team_players(team_name)
+
         if not players:
             log.warning(f"WC: Keine Spielerdaten für {team_name} → kein Verletzungsimpact")
             return 0.0, []

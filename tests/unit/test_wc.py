@@ -181,36 +181,36 @@ class TestWCFeatureBuilder:
 class TestWCCsvImport:
 
     def test_stage_normalization_groups(self):
-        from scripts.import_wc_csv import normalize_stage
-        assert normalize_stage("Group A") == ("GROUP_STAGE", "GROUP_A")
-        assert normalize_stage("Group B") == ("GROUP_STAGE", "GROUP_B")
-        assert normalize_stage("Group L") == ("GROUP_STAGE", "GROUP_L")
-        assert normalize_stage("Group 1") == ("GROUP_STAGE", "GROUP_A")
-        assert normalize_stage("Group 4") == ("GROUP_STAGE", "GROUP_D")
+        from scripts.import_wc_csv import normalize_stage, normalize_group
+        assert normalize_stage("group stage") == "GROUP_STAGE"
+        assert normalize_group("Group A") == "GROUP_A"
+        assert normalize_group("Group B") == "GROUP_B"
+        assert normalize_group("Group L") == "GROUP_L"
+        assert normalize_group("Group 1") == "GROUP_A"
+        assert normalize_group("Group 4") == "GROUP_D"
+        assert normalize_group("not applicable") is None
 
     def test_stage_normalization_knockout(self):
         from scripts.import_wc_csv import normalize_stage
-        assert normalize_stage("Round of 16")[0] == "LAST_16"
-        assert normalize_stage("Quarter-finals")[0] == "QUARTER_FINALS"
-        assert normalize_stage("Semi-finals")[0] == "SEMI_FINALS"
-        assert normalize_stage("Final")[0] == "FINAL"
-        assert normalize_stage("Match for third place")[0] == "THIRD_PLACE"
+        assert normalize_stage("round of 16") == "LAST_16"
+        assert normalize_stage("quarter-finals") == "QUARTER_FINALS"
+        assert normalize_stage("quarter-final") == "QUARTER_FINALS"
+        assert normalize_stage("semi-finals") == "SEMI_FINALS"
+        assert normalize_stage("final") == "FINAL"
+        assert normalize_stage("third-place match") == "THIRD_PLACE"
 
     def test_synthetic_team_ids_stable(self):
-        from scripts.import_wc_csv import _team_api_id
-        id_germany = _team_api_id("Germany")
-        assert id_germany == _team_api_id("Germany"), "IDs must be deterministic"
-        assert id_germany == _team_api_id("  Germany  "), "IDs must be whitespace-insensitive"
-        assert 900_000 <= id_germany < 1_000_000, "IDs must be in synthetic range"
-        assert _team_api_id("Germany") != _team_api_id("France"), "Different teams = different IDs"
+        from scripts.import_wc_csv import _team_db_id
+        id_germany = _team_db_id("T-30")
+        assert id_germany == _team_db_id("T-30"), "IDs must be deterministic"
+        assert id_germany == 830_030, "T-30 must map to 830030"
+        assert _team_db_id("T-46") == 830_046
+        assert _team_db_id("T-30") != _team_db_id("T-46")
 
-    def test_date_parsing(self):
-        from scripts.import_wc_csv import _parse_date
-        assert _parse_date("13 Jul 1930 - 15:00") == date(1930, 7, 13)
-        assert _parse_date("17 June 1970") == date(1970, 6, 17)
-        assert _parse_date("2022-11-20") == date(2022, 11, 20)
-        assert _parse_date("") is None
-        assert _parse_date(None) is None
+    def test_match_db_id(self):
+        from scripts.import_wc_csv import _match_db_id
+        assert _match_db_id(1) == 700_001
+        assert _match_db_id(1248) == 701_248
 
 
 # ── Collector Mapping Tests ───────────────────────────────────────────────────
