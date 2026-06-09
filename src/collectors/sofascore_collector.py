@@ -22,19 +22,7 @@ class SofascoreCollector:
     """
     
     def get_team_id(self, team_name: str) -> int:
-        """Sucht die Sofascore Team-ID über den Namen.
-        Nutzt hardcoded WC-Nationalteam-IDs für schnelle Lookups ohne API-Call.
-        """
-        # Fast path: hardcoded WC national team IDs
-        try:
-            from src.features.wc_team_map import get_sofascore_id
-            cached_id = get_sofascore_id(team_name)
-            if cached_id:
-                log.info(f"Sofascore ID (hardcoded) für {team_name}: {cached_id}")
-                return cached_id
-        except ImportError:
-            pass
-
+        """Sucht die Sofascore Team-ID über den Namen."""
         log.info(f"Mappe Team '{team_name}' zu Sofascore...")
         try:
             result = asyncio.run(search_team_on_sofascore(team_name))

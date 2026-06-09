@@ -67,9 +67,12 @@ def _wc_national_team_impact(team_name: str):
     try:
         collector = TransfermarktCollector()
 
-        # Prefer DB-stored TM ID (set by map_wc_teams.py)
+        # Use stored TM ID if available (set via map_teams.py --league WC)
         session = get_session()
-        team_obj = session.query(Team).filter_by(name=team_name, league="WC").first()
+        team_obj = session.query(Team).filter(
+            Team.name == team_name, Team.league == "WC",
+            Team.transfermarkt_id.isnot(None)
+        ).first()
         session.close()
         tm_id = team_obj.transfermarkt_id if team_obj else None
 

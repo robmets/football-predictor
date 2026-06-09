@@ -166,7 +166,13 @@ def load_features(league: str = "BL1") -> pd.DataFrame:
 def load_teams_from_db(league: str = "BL1") -> list[str]:
     try:
         session = get_session()
-        teams = session.query(Team).filter(Team.league == league).all()
+        if league == "WC":
+            # Only show current WC 2026 participants (real API IDs, not historical synthetic 830000+ IDs)
+            teams = session.query(Team).filter(
+                Team.league == "WC", Team.api_id < 800_000
+            ).all()
+        else:
+            teams = session.query(Team).filter(Team.league == league).all()
         session.close()
         return sorted([t.name for t in teams if t.name])
     except Exception:
@@ -322,17 +328,25 @@ if page == "🎯 Match Prediction":
         st.error(f"Keine Daten für {league}. Bitte zuerst `python scripts/update.py --league {league}` ausführen.")
         st.stop()
 
-    if "season" in df.columns:
-        latest_season = df["season"].max()
-        active_teams = set(df[df["season"] == latest_season]["home_team"].dropna()) | \
-                       set(df[df["season"] == latest_season]["away_team"].dropna())
+    if league == "WC":
+        # WC: show current 2026 participants from DB (real API teams), not historical CSV teams
+        all_teams = load_teams_from_db("WC")
+        if not all_teams:
+            # fallback: latest season from features CSV
+            latest_season = df["season"].max()
+            active_teams = set(df[df["season"] == latest_season]["home_team"].dropna()) | \
+                           set(df[df["season"] == latest_season]["away_team"].dropna())
+            all_teams = sorted(t for t in active_teams if not str(t).startswith("ID:"))
     else:
-        active_teams = set(df["home_team"].dropna()) | set(df["away_team"].dropna())
-        
-    if not active_teams:
-        active_teams = set(teams)
-
-    all_teams = sorted(t for t in active_teams if not str(t).startswith("ID:"))
+        if "season" in df.columns:
+            latest_season = df["season"].max()
+            active_teams = set(df[df["season"] == latest_season]["home_team"].dropna()) | \
+                           set(df[df["season"] == latest_season]["away_team"].dropna())
+        else:
+            active_teams = set(df["home_team"].dropna()) | set(df["away_team"].dropna())
+        if not active_teams:
+            active_teams = set(teams)
+        all_teams = sorted(t for t in active_teams if not str(t).startswith("ID:"))
 
     col1, col2, col3 = st.columns([5, 1, 5])
     with col1:
