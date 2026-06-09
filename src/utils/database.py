@@ -48,6 +48,8 @@ class Match(Base):
     home_goals      = Column(Integer)
     away_goals      = Column(Integer)
     status          = Column(String)
+    stage           = Column(String)      # WC/CL: GROUP_STAGE, LAST_16, QUARTER_FINALS, …
+    group_name      = Column(String)      # WC: GROUP_A … GROUP_L
 
 
 class Prediction(Base):

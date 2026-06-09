@@ -52,8 +52,10 @@ class LiveFormCalculator:
         if not all_dfs:
             return primary_df if primary_df is not None else pd.DataFrame()
 
+        combined = pd.concat(all_dfs)
+        combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
         combined = (
-            pd.concat(all_dfs)
+            combined
             .drop_duplicates(subset=["match_id"])
             .sort_values("date")
             .reset_index(drop=True)

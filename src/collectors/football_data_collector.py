@@ -89,6 +89,8 @@ class FootballDataCollector:
                     home_goals   = m["score"]["fullTime"]["home"],
                     away_goals   = m["score"]["fullTime"]["away"],
                     status       = m["status"],
+                    stage        = m.get("stage"),
+                    group_name   = m.get("group"),
                 )
 
                 # Upsert: skip if already in DB
@@ -146,15 +148,82 @@ class FootballDataCollector:
             for m in data.get("matches", [])
         ])
 
+    def get_wc_group_standings(self, season: str = None) -> dict:
+        """
+        Berechnet WC-Gruppenstandings aus der lokalen DB.
+        Gibt dict zurück: {team_name: {position, points, gd, group}} — Position innerhalb der Gruppe.
+        """
+        from src.utils.database import get_session as _gs, Match as _M, Team as _T
+        sess = _gs()
+        try:
+            q = sess.query(_M).filter(_M.league == "WC", _M.status == "FINISHED",
+                                      _M.stage == "GROUP_STAGE")
+            if season:
+                q = q.filter(_M.season == str(season))
+            matches = q.all()
+
+            tmap = {t.api_id: t.name for t in sess.query(_T).filter(_T.league == "WC").all()}
+        finally:
+            sess.close()
+
+        if not matches:
+            return {}
+
+        # Build standings per group
+        group_table: dict[str, dict[str, dict]] = {}
+        for m in matches:
+            h = tmap.get(m.home_team_id, f"ID:{m.home_team_id}")
+            a = tmap.get(m.away_team_id, f"ID:{m.away_team_id}")
+            grp = m.group_name or "GROUP_?"
+
+            for team in (h, a):
+                if grp not in group_table:
+                    group_table[grp] = {}
+                if team not in group_table[grp]:
+                    group_table[grp][team] = {"points": 0, "gd": 0, "gf": 0, "group": grp}
+
+            hg, ag = m.home_goals or 0, m.away_goals or 0
+            # Home team
+            group_table[grp][h]["gf"] += hg
+            group_table[grp][h]["gd"] += hg - ag
+            if hg > ag:
+                group_table[grp][h]["points"] += 3
+            elif hg == ag:
+                group_table[grp][h]["points"] += 1
+                group_table[grp][a]["points"] += 1
+            else:
+                group_table[grp][a]["points"] += 3
+            # Away team
+            group_table[grp][a]["gf"] += ag
+            group_table[grp][a]["gd"] += ag - hg
+
+        # Flatten with position within group
+        result = {}
+        for grp, teams in group_table.items():
+            sorted_teams = sorted(
+                teams.items(),
+                key=lambda x: (x[1]["points"], x[1]["gd"], x[1]["gf"]),
+                reverse=True,
+            )
+            for pos, (team, stats) in enumerate(sorted_teams, 1):
+                result[team] = {**stats, "position": pos}
+
+        return result
+
     def get_live_standings(self, league_code: str) -> dict:
         """
-        Holt die aktuelle Tabelle einer Liga. 
+        Holt die aktuelle Tabelle einer Liga.
         Nutzt einen lokalen Cache (1x am Tag abrufen schont die API).
+        WC: berechnet Gruppenstandings aus lokaler DB.
         """
         import json
         from pathlib import Path
         from datetime import datetime
-        
+
+        # WC: aus DB berechnen (kein API-Call nötig)
+        if league_code == "WC":
+            return self.get_wc_group_standings()
+
         # Welcher Wettbewerb? (Code übersetzen falls nötig)
         fd_league_map = {"BL1": "BL1", "PL": "PL", "PD": "PD", "SA": "SA", "FL1": "FL1"}
         comp_code = fd_league_map.get(league_code)
@@ -214,6 +283,8 @@ class FootballDataCollector:
                 "league":      m.get("competition", {}).get("code"),
                 "season":      m.get("season", {}).get("startDate", "")[:4],
                 "matchday":    m.get("matchday"),
+                "stage":       m.get("stage"),
+                "group_name":  m.get("group"),
                 "home_team":   m["homeTeam"]["name"],
                 "away_team":   m["awayTeam"]["name"],
                 "home_goals":  m["score"]["fullTime"]["home"],

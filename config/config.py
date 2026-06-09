@@ -51,6 +51,9 @@ class Config:
         "CL":  "Champions League",
         "EL":  "Europa League",
         "UECL": "Conference League",
+        # Turniere
+        "WC":  "FIFA World Cup",
+        "EC":  "European Championship",
     }
 
 

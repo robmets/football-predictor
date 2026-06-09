@@ -57,8 +57,61 @@ def parse_market_value(value_str) -> int:
     else:
         return int(number)
 
-def calculate_missing_impact(team_name: str):
+def _wc_national_team_impact(team_name: str):
+    """
+    WC national team injury fallback via Transfermarkt national team search.
+    Uses player-search approach since club-API doesn't serve national squads.
+    Returns (impact_pct, missing_names) — graceful 0.0 fallback on any error.
+    """
+    try:
+        collector = TransfermarktCollector()
+        # Search for national team players via country name
+        players = collector.get_national_team_players(team_name)
+        if not players:
+            log.warning(f"WC: Keine Spielerdaten für {team_name} → kein Verletzungsimpact")
+            return 0.0, []
+
+        today = datetime.now().date()
+        total_value = 0
+        missing_value = 0
+        missing_players = []
+
+        for player in players:
+            val = parse_market_value(player.get("marketValue", "0"))
+            total_value += val
+            player_id = player.get("id")
+            if not player_id:
+                continue
+            absences = collector.get_player_injuries(player_id)
+            for absence in (absences or []):
+                until_date = parse_tm_date(absence.get("untilDate") or absence.get("until_date"))
+                from_date  = parse_tm_date(absence.get("fromDate") or absence.get("from_date"))
+                is_out = (until_date and until_date >= today) or (
+                    not until_date and from_date and (today - from_date).days < 250
+                )
+                if is_out:
+                    missing_value += val
+                    missing_players.append({
+                        "name": player.get("name"), "value": val,
+                        "reason": absence.get("injury", "Unbekannt"),
+                    })
+                    break
+
+        impact = (missing_value / total_value * 100) if total_value > 0 else 0.0
+        return impact, [p["name"] for p in missing_players]
+
+    except Exception as e:
+        log.warning(f"WC national team impact fallback für {team_name}: {e}")
+        return 0.0, []
+
+
+def calculate_missing_impact(team_name: str, league: str = None):
     """Berechnet den prozentualen Marktwertverlust durch Ausfälle."""
+
+    # WC/EC: Nationalteams haben keine Club-TM-ID → graceful fallback
+    if league in ("WC", "EC"):
+        return _wc_national_team_impact(team_name)
+
     session = get_session()
     team = session.query(Team).filter_by(name=team_name).first()
     session.close()

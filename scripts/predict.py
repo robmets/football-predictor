@@ -81,8 +81,10 @@ def _print_prediction(result: dict):
 def predict(
     home:          str = typer.Option(...,    "--home",   "-h"),
     away:          str = typer.Option(...,    "--away",   "-a"),
-    league:        str = typer.Option("BL1", "--league", "-l"),
+    league:        str = typer.Option("BL1",  "--league", "-l"),
     sims:          int = typer.Option(config.SIMULATION_RUNS, "--sims", "-n"),
+    stage:         str = typer.Option(None,   "--stage",  help="WC stage: GROUP_STAGE|LAST_16|QUARTER_FINALS|SEMI_FINALS|FINAL"),
+    group:         str = typer.Option(None,   "--group",  help="WC group: GROUP_A … GROUP_L"),
 ):
     path = Path(f"data/processed/features_{league}.csv")
     if not path.exists():
@@ -97,9 +99,9 @@ def predict(
     # 1. TRANSFERMARKT: Verletzungen
     # ---------------------------------------------------------
     log.info(f"Hole Verletzungsdaten für {home}...")
-    home_impact, home_missing_names = calculate_missing_impact(home)
+    home_impact, home_missing_names = calculate_missing_impact(home, league=league) or (0.0, [])
     log.info(f"Hole Verletzungsdaten für {away}...")
-    away_impact, away_missing_names = calculate_missing_impact(away)
+    away_impact, away_missing_names = calculate_missing_impact(away, league=league) or (0.0, [])
 
     if home_impact and home_impact > 15.0:
         log.warning(f"ACHTUNG: {home} stark geschwächt! ({home_impact:.1f}%)")
@@ -197,10 +199,20 @@ def predict(
         standings = {}
 
     ctx_engine = ContextEngine()
-    matchday = 20
-    if standings and home in standings:
-        matchday = standings[home].get("playedGames", 19) + 1
-    context = ctx_engine.calculate_context(home, away, league, matchday, standings)
+    if league == "WC":
+        # WC: matchday from group position, stage from CLI arg
+        wc_stage = stage or "GROUP_STAGE"
+        wc_group = group
+        matchday = 2  # default mid-group
+        context = ctx_engine.calculate_context(
+            home, away, league, matchday, standings,
+            stage=wc_stage, group_name=wc_group,
+        )
+    else:
+        matchday = 20
+        if standings and home in standings:
+            matchday = standings[home].get("playedGames", 19) + 1
+        context = ctx_engine.calculate_context(home, away, league, matchday, standings)
 
     # Knockout-Boost oder Tabellen-Boost auf Form-Faktor anwenden
     home_form["attack_factor"] = round(home_form["attack_factor"] * context["home_motivation"], 3)

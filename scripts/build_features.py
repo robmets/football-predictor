@@ -41,6 +41,8 @@ def load_matches_from_db(league: str = "BL1") -> pd.DataFrame:
             "league":     m.league,
             "season":     m.season,
             "matchday":   m.matchday,
+            "stage":      m.stage,
+            "group_name": m.group_name,
             "home_team":  teams.get(m.home_team_id, f"ID:{m.home_team_id}"),
             "away_team":  teams.get(m.away_team_id, f"ID:{m.away_team_id}"),
             "home_goals": m.home_goals,

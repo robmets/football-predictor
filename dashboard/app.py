@@ -198,8 +198,8 @@ with st.sidebar:
 
     st.markdown("---")
     league = st.selectbox(
-        "Liga",
-        options=["BL1", "PL", "PD", "SA", "FL1", "CL", "EL", "UECL", "BL2", "ELC", "SD", "SB", "FL2"],
+        "Liga / Turnier",
+        options=["WC", "BL1", "PL", "PD", "SA", "FL1", "CL", "EL", "UECL", "BL2", "ELC", "SD", "SB", "FL2"],
         format_func=lambda x: config.SUPPORTED_LEAGUES.get(x, x),
     )
     sims = st.select_slider(
@@ -236,8 +236,9 @@ with st.sidebar:
                 import pandas as _pd
                 from src.collectors.football_data_collector import FootballDataCollector as _FDC
                 from src.features.feature_builder import FeatureBuilder as _FB
-                _FDC().fetch_matches(league=league, seasons=2)
-                _FDC().fetch_teams(league=league)
+                if league != "WC":  # WC historical data comes from CSV import
+                    _FDC().fetch_matches(league=league, seasons=2)
+                    _FDC().fetch_teams(league=league)
                 sess2 = _gs()
                 _matches = sess2.query(_Match).filter(_Match.league == league, _Match.status == "FINISHED").all()
                 _tmap = {t.api_id: t.name for t in sess2.query(_Team).all()}
@@ -245,6 +246,7 @@ with st.sidebar:
                 def _r(h, a): return "H" if h > a else ("A" if h < a else "D")
                 _rows = [{"match_id": m.api_id, "date": str(m.date), "league": m.league,
                           "season": m.season, "matchday": m.matchday,
+                          "stage": m.stage, "group_name": m.group_name,
                           "home_team": _tmap.get(m.home_team_id, f"ID:{m.home_team_id}"),
                           "away_team": _tmap.get(m.away_team_id, f"ID:{m.away_team_id}"),
                           "home_goals": m.home_goals, "away_goals": m.away_goals,
@@ -347,6 +349,9 @@ if page == "🎯 Match Prediction":
 
     # ── CL/EL Stage-Selektor ────────────────────────────────────────────────
     manual_matchday = None
+    wc_stage_selected = None
+    wc_group_selected = None
+
     if league in ("CL", "EL", "UECL"):
         CL_STAGES = {
             "🏆 Gruppenphase / Ligaphase":        -1,
@@ -378,6 +383,40 @@ if page == "🎯 Match Prediction":
         )
         manual_matchday = stages[selected_stage]
 
+    elif league == "WC":
+        st.markdown('<p class="section-title">🌍 WM-Runde & Gruppe</p>', unsafe_allow_html=True)
+        WC_STAGES = {
+            "🏆 Gruppenphase — Spieltag 1":  ("GROUP_STAGE", 1),
+            "🏆 Gruppenphase — Spieltag 2":  ("GROUP_STAGE", 2),
+            "🏆 Gruppenphase — Spieltag 3":  ("GROUP_STAGE", 3),
+            "🔵 Round of 32":                ("LAST_32",     4),
+            "🔵 Round of 16":                ("LAST_16",     4),
+            "🟡 Viertelfinale":              ("QUARTER_FINALS", 5),
+            "🟠 Halbfinale":                 ("SEMI_FINALS",    6),
+            "⚪ Spiel um Platz 3":           ("THIRD_PLACE",    7),
+            "🔴 Finale":                     ("FINAL",          8),
+        }
+        selected_wc = st.selectbox(
+            "WM — Runde",
+            options=list(WC_STAGES.keys()),
+            index=1,
+            help="Bestimmt Motivation und Urgency der Teams.",
+        )
+        wc_stage_selected, manual_matchday = WC_STAGES[selected_wc]
+
+        # Group selector (only relevant for group stage)
+        if wc_stage_selected == "GROUP_STAGE":
+            WC_GROUPS = ["GROUP_A", "GROUP_B", "GROUP_C", "GROUP_D", "GROUP_E", "GROUP_F",
+                         "GROUP_G", "GROUP_H", "GROUP_I", "GROUP_J", "GROUP_K", "GROUP_L"]
+            wc_group_selected = st.selectbox(
+                "Gruppe",
+                options=WC_GROUPS,
+                format_func=lambda x: x.replace("GROUP_", "Gruppe "),
+            )
+
+        # Neutral venue notice
+        st.info("⚖️ Neutrales Spielfeld — kein Heimvorteil im Poisson-Modell", icon="🌍")
+
     run_btn = st.button("⚡ Simulation starten", type="primary", width='stretch')
 
     if run_btn:
@@ -389,8 +428,8 @@ if page == "🎯 Match Prediction":
                 st.error("Modell konnte nicht gefittet werden.")
                 st.stop()
 
-            _h_inj = calculate_missing_impact(home_team)
-            _a_inj = calculate_missing_impact(away_team)
+            _h_inj = calculate_missing_impact(home_team, league=league)
+            _a_inj = calculate_missing_impact(away_team, league=league)
             home_inj          = _h_inj[0] if _h_inj else 0.0
             home_missing_names = _h_inj[1] if _h_inj else []
             away_inj          = _a_inj[0] if _a_inj else 0.0
@@ -481,16 +520,24 @@ if page == "🎯 Match Prediction":
                 standings = {}
 
             ctx_engine = ContextEngine()
-            # manual_matchday: None = keine CL/EL Auswahl, -1 = Gruppenphase, 9-15 = KO
-            if manual_matchday is not None and manual_matchday > 0:
-                _matchday = manual_matchday  # explizite KO-Runde ausgewählt
-            elif manual_matchday == -1:
-                _matchday = 4  # Ligaphase: sicher unter KO-Schwelle (< 9)
+            if league == "WC":
+                # WC: use stage + group from sidebar selectors
+                _matchday = manual_matchday or 2
+                context = ctx_engine.calculate_context(
+                    home_team, away_team, league, _matchday, standings,
+                    stage=wc_stage_selected, group_name=wc_group_selected,
+                )
             else:
-                _matchday = 20
-                if standings and home_team in standings:
-                    _matchday = standings[home_team].get("playedGames", 19) + 1
-            context = ctx_engine.calculate_context(home_team, away_team, league, _matchday, standings)
+                # manual_matchday: None = keine CL/EL Auswahl, -1 = Gruppenphase, 9-15 = KO
+                if manual_matchday is not None and manual_matchday > 0:
+                    _matchday = manual_matchday
+                elif manual_matchday == -1:
+                    _matchday = 4
+                else:
+                    _matchday = 20
+                    if standings and home_team in standings:
+                        _matchday = standings[home_team].get("playedGames", 19) + 1
+                context = ctx_engine.calculate_context(home_team, away_team, league, _matchday, standings)
 
             home_form["attack_factor"] = round(home_form["attack_factor"] * context["home_motivation"], 3)
             away_form["attack_factor"] = round(away_form["attack_factor"] * context["away_motivation"], 3)
@@ -540,10 +587,25 @@ if page == "🎯 Match Prediction":
             pred_id = XGBoostFeedbackModel.save_prediction(result, league=league)
             result["prediction_id"] = pred_id
 
+        # ── WC Group Standings anzeigen ─────────────────────────────────────
+        if league == "WC" and wc_stage_selected == "GROUP_STAGE" and wc_group_selected and standings:
+            grp_label = wc_group_selected.replace("GROUP_", "Gruppe ")
+            grp_teams = {t: s for t, s in standings.items() if s.get("group") == wc_group_selected}
+            if grp_teams:
+                st.markdown(f'<p class="section-title">🌍 {grp_label} — Aktuelle Tabelle</p>', unsafe_allow_html=True)
+                grp_rows = sorted(grp_teams.items(), key=lambda x: (x[1].get("position", 99)))
+                grp_df = pd.DataFrame([
+                    {"#": s.get("position", ""), "Team": t,
+                     "Pkt": s.get("points", 0), "TD": s.get("gd", 0)}
+                    for t, s in grp_rows
+                ])
+                st.dataframe(grp_df, hide_index=True, use_container_width=True)
+
         # ── Matchup Header ──────────────────────────────────────────────────
         is_knockout = result.get("is_knockout", False)
         knockout_stage = result.get("knockout_stage", "")
         derby_badge = " 🔥 DERBY" if result.get("is_derby") else ""
+        wc_neutral_badge = " ⚖️ Neutral" if league == "WC" else ""
         knockout_badge = f" 🏆 {knockout_stage.upper()}" if is_knockout and knockout_stage else ""
         home_boost = f" ×{result.get('home_motivation', 1.0):.3f}" if result.get("home_motivation", 1.0) > 1.01 else ""
         away_boost = f" ×{result.get('away_motivation', 1.0):.3f}" if result.get("away_motivation", 1.0) > 1.01 else ""
@@ -566,7 +628,7 @@ if page == "🎯 Match Prediction":
         <div class="matchup-header">
             <div style="display:flex;justify-content:space-between;align-items:center;">
                 <div class="team-name">{home_team}<span style="font-size:0.9rem;color:#fbbf24">{home_boost}</span></div>
-                <div><span class="vs-badge">VS{derby_badge}{knockout_badge}</span></div>
+                <div><span class="vs-badge">VS{derby_badge}{knockout_badge}{wc_neutral_badge}</span></div>
                 <div class="team-name">{away_team}<span style="font-size:0.9rem;color:#fbbf24">{away_boost}</span></div>
             </div>
             <div style="margin-top:12px;font-family:'DM Mono',monospace;font-size:0.72rem;color:#475569;">

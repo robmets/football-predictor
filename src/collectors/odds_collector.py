@@ -34,6 +34,9 @@ LEAGUE_TO_SPORT = {
     "CL":  "soccer_uefa_champs_league",
     "EL":  "soccer_uefa_europa_league",
     "UECL": "soccer_uefa_europa_conference_league",
+    # Turniere
+    "WC":  "soccer_fifa_world_cup",
+    "EC":  "soccer_uefa_euro",
 }
 
 # Bookmakers to include (in priority order)

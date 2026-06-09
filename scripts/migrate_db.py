@@ -47,6 +47,19 @@ def migrate():
         cur.execute("ALTER TABLE predictions ADD COLUMN actual_btts INTEGER")
         log.success("predictions.actual_btts hinzugefügt")
 
+    # ── Matches: stage + group_name für WC/CL ────────────────────────────────
+    if not column_exists(cur, "matches", "stage"):
+        cur.execute("ALTER TABLE matches ADD COLUMN stage TEXT")
+        log.success("matches.stage hinzugefügt")
+    else:
+        log.info("matches.stage bereits vorhanden")
+
+    if not column_exists(cur, "matches", "group_name"):
+        cur.execute("ALTER TABLE matches ADD COLUMN group_name TEXT")
+        log.success("matches.group_name hinzugefügt")
+    else:
+        log.info("matches.group_name bereits vorhanden")
+
     conn.commit()
     conn.close()
 

@@ -35,6 +35,9 @@ class FeatureBuilder:
         home_team, away_team, home_goals, away_goals, result
     """
 
+    # Leagues where "home" advantage doesn't apply (neutral venues)
+    NEUTRAL_VENUE_LEAGUES = {"WC", "EC"}
+
     def __init__(self, df: pd.DataFrame):
         self.df = df.copy()
         self.df["date"] = pd.to_datetime(self.df["date"])
@@ -63,22 +66,35 @@ class FeatureBuilder:
     # ── Core Extractors ──────────────────────────────────────────────────────
 
     def _extract(self, match: pd.Series, past: pd.DataFrame) -> dict:
-        home = match["home_team"]
-        away = match["away_team"]
+        home   = match["home_team"]
+        away   = match["away_team"]
+        league = match.get("league", "")
+        is_neutral = league in self.NEUTRAL_VENUE_LEAGUES
 
-        home_form   = self._team_form(home, past, n=5)
-        away_form   = self._team_form(away, past, n=5)
+        home_form     = self._team_form(home, past, n=5)
+        away_form     = self._team_form(away, past, n=5)
         home_specific = self._team_form_specific(home, past, venue="home", n=5)
         away_specific = self._team_form_specific(away, past, venue="away", n=5)
-        home_stats  = self._goal_stats(home, past, n=10)
-        away_stats  = self._goal_stats(away, past, n=10)
-        h2h         = self._head_to_head(home, away, past, n=6)
-        home_adv    = self._home_advantage(home, past, n=20)
-        rest        = self._days_rest(home, away, past, match["date"])
-        standings   = self._standings(past, match.get("season"))
+        home_stats    = self._goal_stats(home, past, n=10)
+        away_stats    = self._goal_stats(away, past, n=10)
+        h2h           = self._head_to_head(home, away, past, n=6)
+        rest          = self._days_rest(home, away, past, match["date"])
 
-        home_pos = standings.get(home, {}).get("position", 10)
-        away_pos = standings.get(away, {}).get("position", 10)
+        # WC: standings within the group; otherwise overall season standings
+        group_name = match.get("group_name") if "group_name" in match.index else None
+        if league == "WC" and group_name:
+            standings = self._wc_group_standings(past, match.get("season"), group_name)
+        else:
+            standings = self._standings(past, match.get("season"))
+
+        # Home advantage: neutral venues → no home win rate signal
+        if is_neutral:
+            home_adv = {"home_win_rate": 0.33, "goals_home_avg": home_stats["scored_avg"]}
+        else:
+            home_adv = self._home_advantage(home, past, n=20)
+
+        home_pos = standings.get(home, {}).get("position", 4 if league == "WC" else 10)
+        away_pos = standings.get(away, {}).get("position", 4 if league == "WC" else 10)
         home_pts = standings.get(home, {}).get("points", 0)
         away_pts = standings.get(away, {}).get("points", 0)
 
@@ -88,22 +104,24 @@ class FeatureBuilder:
             "date":                 match["date"],
             "season":               match.get("season"),
             "matchday":             match.get("matchday"),
+            "stage":                match.get("stage"),
+            "group_name":           group_name,
             "home_team":            home,
             "away_team":            away,
 
             # --- Target variable ---
-            "result":               match.get("result"),          # H / D / A
+            "result":               match.get("result"),
             "home_goals":           match.get("home_goals"),
             "away_goals":           match.get("away_goals"),
 
-            # --- Form (weighted points per game, 0–3 scale) ---
+            # --- Form ---
             "home_form_ppg":        home_form["ppg"],
             "away_form_ppg":        away_form["ppg"],
             "form_diff":            home_form["ppg"] - away_form["ppg"],
             "home_form_ppg_specific": home_specific["ppg"],
             "away_form_ppg_specific": away_specific["ppg"],
 
-            # --- Goals scored ---
+            # --- Goals ---
             "home_goals_scored_avg":    home_stats["scored_avg"],
             "home_goals_conceded_avg":  home_stats["conceded_avg"],
             "away_goals_scored_avg":    away_stats["scored_avg"],
@@ -120,7 +138,7 @@ class FeatureBuilder:
             "h2h_home_win_rate":    h2h["home_win_rate"],
             "h2h_games_played":     h2h["games_played"],
 
-            # --- Home advantage ---
+            # --- Home advantage (0.33 for neutral venues) ---
             "home_win_rate_at_home": home_adv["home_win_rate"],
             "home_goals_home_avg":   home_adv["goals_home_avg"],
 
@@ -129,10 +147,10 @@ class FeatureBuilder:
             "away_days_rest":       rest["away_days_rest"],
             "rest_advantage":       rest["home_days_rest"] - rest["away_days_rest"],
 
-            # --- League standings ---
+            # --- Standings (group standings for WC) ---
             "home_league_position": home_pos,
             "away_league_position": away_pos,
-            "position_diff":        away_pos - home_pos,   # positive = home team higher
+            "position_diff":        away_pos - home_pos,
             "home_points":          home_pts,
             "away_points":          away_pts,
             "points_diff":          home_pts - away_pts,
@@ -162,7 +180,7 @@ class FeatureBuilder:
         pts   = all_games["pts"].values
         wts   = FORM_WEIGHTS[:len(pts)]
         wts   = wts / wts.sum()
-        w_ppg = float(np.dot(pts, wts))
+        w_ppg = round(float(np.dot(pts, wts)), 6)
 
         return {"ppg": w_ppg, "games": len(all_games)}
 
@@ -183,7 +201,7 @@ class FeatureBuilder:
         pts   = all_games["pts"].values
         wts   = FORM_WEIGHTS[:len(pts)]
         wts   = wts / wts.sum()
-        w_ppg = float(np.dot(pts, wts))
+        w_ppg = round(float(np.dot(pts, wts)), 6)
 
         return {"ppg": w_ppg, "games": len(all_games)}
 
@@ -261,22 +279,37 @@ class FeatureBuilder:
             "away_days_rest": rest_days(away),
         }
 
-    def _standings(self, past: pd.DataFrame, season: str) -> dict:
+    def _wc_group_standings(self, past: pd.DataFrame, season: str, group_name: str) -> dict:
         """
-        Compute live standings from past matches within the same season.
-        Returns dict: team → {points, gd, position}
+        Computes WC standings restricted to a single group.
+        Returns same format as _standings: {team: {points, gd, gf, position}}.
         """
         season_matches = past[past["season"] == season] if season else past
+        if "group_name" not in season_matches.columns:
+            return {}
+        group_matches = season_matches[season_matches["group_name"] == group_name]
+        if len(group_matches) == 0:
+            return {}
+        return self._compute_table(group_matches)
 
+    def _standings(self, past: pd.DataFrame, season: str) -> dict:
+        """Compute live standings from past matches within the same season."""
+        season_matches = past[past["season"] == season] if season else past
         if len(season_matches) == 0:
             return {}
+        return self._compute_table(season_matches)
 
-        teams = set(season_matches["home_team"]) | set(season_matches["away_team"])
+    def _compute_table(self, matches: pd.DataFrame) -> dict:
+        """Shared table builder used by both _standings and _wc_group_standings."""
+        if len(matches) == 0:
+            return {}
+
+        teams = set(matches["home_team"]) | set(matches["away_team"])
         table = {}
 
         for team in teams:
-            home = season_matches[season_matches["home_team"] == team]
-            away = season_matches[season_matches["away_team"] == team]
+            home = matches[matches["home_team"] == team]
+            away = matches[matches["away_team"] == team]
 
             pts  = (home["result"] == "H").sum() * 3 + (home["result"] == "D").sum()
             pts += (away["result"] == "A").sum() * 3 + (away["result"] == "D").sum()
@@ -286,11 +319,10 @@ class FeatureBuilder:
 
             table[team] = {"points": int(pts), "gd": int(gf - ga), "gf": int(gf)}
 
-        # Sort by points → goal difference → goals scored
         sorted_teams = sorted(
             table.items(),
             key=lambda x: (x[1]["points"], x[1]["gd"], x[1]["gf"]),
-            reverse=True
+            reverse=True,
         )
         for pos, (team, _) in enumerate(sorted_teams, 1):
             table[team]["position"] = pos

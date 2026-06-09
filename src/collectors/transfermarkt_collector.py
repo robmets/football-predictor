@@ -145,3 +145,34 @@ class TransfermarktCollector:
         except Exception as e:
             log.error(f"Fehler beim Kader-Abruf: {e}")
             return []
+
+    def get_national_team_players(self, country_name: str) -> list:
+        """
+        Sucht Nationalteam-Spieler auf Transfermarkt via Vereinssuche (nation = club-like entity).
+        Transfermarkt listet Nationalteams als spezielle Vereine (z.B. "Germany" club_id).
+        Fallback: leere Liste wenn nicht gefunden.
+        """
+        log.info(f"Suche Nationalteam-Spieler für: {country_name}")
+        try:
+            # TM treat national teams like clubs — search with country name
+            tm_id = self.search_club(country_name, country_name)
+            if not tm_id:
+                # Try with common short names
+                short_names = {
+                    "Germany": "deutschland", "England": "england",
+                    "France": "france", "Spain": "spain", "Brazil": "brasilien",
+                    "Argentina": "argentinien", "Italy": "italien",
+                    "Portugal": "portugal", "Netherlands": "niederlande",
+                }
+                alt = short_names.get(country_name)
+                if alt:
+                    tm_id = self.search_club(alt, country_name)
+
+            if not tm_id:
+                log.warning(f"Keine TM-ID für Nationalteam: {country_name}")
+                return []
+
+            return self.get_club_players(tm_id)
+        except Exception as e:
+            log.warning(f"National team player lookup failed for {country_name}: {e}")
+            return []

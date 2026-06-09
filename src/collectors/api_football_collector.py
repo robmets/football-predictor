@@ -35,6 +35,8 @@ LEAGUE_IDS = {
     "SA":  135,   # Italy Serie A
     "FL1": 61,    # France Ligue 1
     "CL":  2,     # UEFA Champions League
+    "WC":  1,     # FIFA World Cup
+    "EC":  4,     # UEFA European Championship
 }
 
 # Cache: team_name → api-football team_id (vermeidet Search-Calls)
