@@ -46,7 +46,8 @@ def build_features(league: str) -> int:
     """Baut Feature-Matrix aus DB und speichert als CSV."""
     session = get_session()
     matches = session.query(Match).filter(
-        Match.league == league, Match.status == "FINISHED"
+        Match.league == league, Match.status == "FINISHED",
+        Match.home_goals.isnot(None), Match.away_goals.isnot(None),
     ).all()
     teams = {t.api_id: t.name for t in session.query(Team).all()}
     session.close()
@@ -56,6 +57,7 @@ def build_features(league: str) -> int:
     rows = [{
         "match_id":   m.api_id, "date": str(m.date),
         "league":     m.league, "season": m.season, "matchday": m.matchday,
+        "stage":      m.stage, "group_name": m.group_name,
         "home_team":  teams.get(m.home_team_id, f"ID:{m.home_team_id}"),
         "away_team":  teams.get(m.away_team_id, f"ID:{m.away_team_id}"),
         "home_goals": m.home_goals, "away_goals": m.away_goals,

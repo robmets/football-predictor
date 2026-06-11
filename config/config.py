@@ -56,6 +56,19 @@ class Config:
         "EC":  "European Championship",
     }
 
+    # --- Turniere auf neutralem Platz (kein Heimvorteil im Modell) ---
+    NEUTRAL_VENUE_LEAGUES: frozenset = frozenset({"WC", "EC"})
+
+    # --- Dixon-Coles Zeitgewichtung: exp(-xi * Tage) ---
+    # Klubfußball: Halbwertszeit ~230 Tage. Turniere finden nur alle 4 Jahre
+    # statt — dort muss die Halbwertszeit ~9.5 Jahre betragen, sonst hat das
+    # gesamte Datenset effektiv Gewicht ~0 und die Team-Stärken degenerieren.
+    POISSON_TIME_DECAY: dict = {
+        "default": 0.003,
+        "WC": 0.0002,
+        "EC": 0.0002,
+    }
+
 
     # --- API Base URLs ---
     FOOTBALL_DATA_BASE_URL: str = "https://api.football-data.org/v4"

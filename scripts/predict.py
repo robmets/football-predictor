@@ -232,7 +232,7 @@ def predict(
     # 4. MODELL & SIMULATION
     # ---------------------------------------------------------
     model = PoissonModel()
-    model.fit(df)
+    model.fit(df, league=league)
     print(f"\n  Team Ratings Top 5 ({config.SUPPORTED_LEAGUES.get(league, league)}):")
     print(model.team_ratings().head(5).to_string(index=False))
 

@@ -141,10 +141,40 @@ class TransfermarktCollector:
         try:
             tm_club_players = TransfermarktClubPlayers(club_id=club_id)
             data = tm_club_players.get_club_players()
-            return data.get("players", []) if isinstance(data, dict) else data
+            players = data.get("players", []) if isinstance(data, dict) else data
+            if not players:
+                # Nationalteam-Kaderseiten haben anderes Markup als Vereinsseiten —
+                # der Bibliotheks-Parser liefert dort eine leere Liste
+                players = self._parse_squad_fallback(tm_club_players.page)
+                if players:
+                    log.info(f"Kader via Fallback-Parser: {len(players)} Spieler (Club-ID {club_id})")
+            return players
         except Exception as e:
             log.error(f"Fehler beim Kader-Abruf: {e}")
             return []
+
+    @staticmethod
+    def _parse_squad_fallback(page) -> list:
+        """
+        Minimal-Parser für Kaderseiten, deren Markup der Bibliotheks-Parser
+        nicht versteht (z.B. Nationalteams). Liefert id, name, marketValue —
+        alles was die Verletzungsanalyse braucht.
+        """
+        players = []
+        for row in page.xpath("//table[@class='items']//tbody/tr"):
+            link = row.xpath(".//td[@class='hauptlink']/a[contains(@href, '/profil/spieler/')]")
+            if not link:
+                continue
+            href = link[0].get("href", "")
+            player_id = href.rstrip("/").split("/")[-1]
+            name = "".join(link[0].itertext()).strip()
+            mv = row.xpath(".//td[contains(@class, 'rechts')]//a[contains(@href, '/marktwertverlauf/')]/text()")
+            players.append({
+                "id": player_id,
+                "name": name,
+                "marketValue": mv[0].strip() if mv else "0",
+            })
+        return players
 
     def get_national_team_players(self, country_name: str) -> list:
         """
@@ -156,17 +186,6 @@ class TransfermarktCollector:
         try:
             # TM treat national teams like clubs — search with country name
             tm_id = self.search_club(country_name, country_name)
-            if not tm_id:
-                # Try with common short names
-                short_names = {
-                    "Germany": "deutschland", "England": "england",
-                    "France": "france", "Spain": "spain", "Brazil": "brasilien",
-                    "Argentina": "argentinien", "Italy": "italien",
-                    "Portugal": "portugal", "Netherlands": "niederlande",
-                }
-                alt = short_names.get(country_name)
-                if alt:
-                    tm_id = self.search_club(alt, country_name)
 
             if not tm_id:
                 log.warning(f"Keine TM-ID für Nationalteam: {country_name}")

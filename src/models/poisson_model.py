@@ -19,10 +19,16 @@ import pandas as pd
 from scipy.stats import poisson
 from scipy.optimize import minimize
 from src.utils.logger import get_logger
+from config.config import config
 
 log = get_logger(__name__)
 
 MAX_GOALS = 10   # score matrix goes from 0..MAX_GOALS x 0..MAX_GOALS
+
+# Ridge-Regularisierung: zieht Attack/Defence dünn besetzter Teams Richtung 1.0
+# (Liga-Schnitt). Bei Ligen mit vielen Spielen pro Team vernachlässigbar,
+# verhindert aber degenerierte Ratings bei Turnierdaten (wenige Spiele/Team).
+RIDGE_STRENGTH = 2.0
 
 
 class PoissonModel:
@@ -42,7 +48,7 @@ class PoissonModel:
 
     # ── Fitting ─────────────────────────────────────────────────────────────
 
-    def fit(self, df: pd.DataFrame, min_games: int = 5) -> "PoissonModel":
+    def fit(self, df: pd.DataFrame, min_games: int = 5, league: str = None) -> "PoissonModel":
         """
         Estimate team strengths from historical match data.
 
@@ -50,6 +56,8 @@ class PoissonModel:
             df: DataFrame with columns home_team, away_team,
                 home_goals, away_goals
             min_games: teams with fewer games are assigned league average
+            league: league code — controls time-decay rate and neutral-venue
+                handling (WC/EC: slow decay, home_advantage fixed at 1.0)
         """
         df = df.dropna(subset=["home_goals", "away_goals"]).copy()
         df["home_goals"] = df["home_goals"].astype(int)
@@ -68,26 +76,30 @@ class PoissonModel:
         log.info(f"Fitting Poisson model on {len(df)} matches, {n} teams")
         log.info(f"Avg goals — Home: {self.avg_goals_home:.2f}  Away: {self.avg_goals_away:.2f}")
 
+        # Neutrale Turniere (WC/EC): kein Heimvorteil im Modell
+        neutral_venue = league in config.NEUTRAL_VENUE_LEAGUES
+
         # --- MLE optimisation ---
         # Parameters: [attack_0..n-1, defence_0..n-1, home_advantage]
         x0 = np.concatenate([
             np.ones(n),           # attack strengths
             np.ones(n),           # defence strengths
-            [self.home_advantage] # home advantage
+            [1.0 if neutral_venue else self.home_advantage]  # home advantage
         ])
 
         bounds = (
             [(0.1, 4.0)] * n +   # attack > 0
             [(0.1, 4.0)] * n +   # defence > 0
-            [(1.0, 2.0),]        # home advantage
+            [(1.0, 1.0) if neutral_venue else (1.0, 2.0)]    # home advantage (fixed for neutral venues)
         )
 
-        # --- Dixon-Coles Zeitgewichtung ---
+        # --- Dixon-Coles Zeitgewichtung (Decay-Rate je nach Wettbewerb) ---
+        xi = config.POISSON_TIME_DECAY.get(league, config.POISSON_TIME_DECAY["default"])
         from datetime import date as _today_date
         ref_date = pd.Timestamp(_today_date.today())
         if "date" in df.columns:
             df["_days_ago"] = (ref_date - pd.to_datetime(df["date"])).dt.days.clip(lower=0)
-            weights = np.exp(-0.003 * df["_days_ago"].values)
+            weights = np.exp(-xi * df["_days_ago"].values)
         else:
             weights = np.ones(len(df))
 
@@ -108,7 +120,7 @@ class PoissonModel:
             args=(hi_arr, ai_arr, hg_arr, ag_arr, weights, n),
             method="L-BFGS-B",
             bounds=bounds,
-            options={"maxiter": 500, "ftol": 1e-9},
+            options={"maxiter": 3000, "maxfun": 50000, "ftol": 1e-9},
         )
 
         if not result.success:
@@ -117,7 +129,14 @@ class PoissonModel:
         params = result.x
         self.attack        = {t: params[idx[t]]     for t in self.teams}
         self.defence       = {t: params[n + idx[t]] for t in self.teams}
-        self.home_advantage = float(params[2 * n])
+        self.home_advantage = 1.0 if neutral_venue else float(params[2 * n])
+
+        # Teams mit zu wenigen Spielen: Liga-Schnitt statt verrauschter MLE-Werte
+        game_counts = pd.concat([df_valid["home_team"], df_valid["away_team"]]).value_counts()
+        for t in self.teams:
+            if int(game_counts.get(t, 0)) < min_games:
+                self.attack[t] = 1.0
+                self.defence[t] = 1.0
 
         self._fitted = True
         log.success(
@@ -151,7 +170,11 @@ class PoissonModel:
                 ag_arr * np.log(la) - la - gammaln(ag_arr + 1)
             )
         )
-        return -log_lik
+
+        # Ridge-Prior: Teams ohne ausreichende (gewichtete) Daten → Richtung 1.0
+        ridge = RIDGE_STRENGTH * (np.sum((attack - 1.0) ** 2) + np.sum((defence - 1.0) ** 2))
+
+        return -log_lik + ridge
 
     # ── Prediction ───────────────────────────────────────────────────────────
 

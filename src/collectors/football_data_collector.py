@@ -64,8 +64,15 @@ class FootballDataCollector:
         all_matches = []
         session = get_session()
 
+        # Turniere (WC/EC) laufen im Kalenderjahr — Saison = Turnierjahr,
+        # nicht das Juli-Juli-Schema des Klubfußballs
+        base_season = (
+            date.today().year if league in config.NEUTRAL_VENUE_LEAGUES
+            else self.CURRENT_SEASON
+        )
+
         for offset in range(seasons):
-            season = self.CURRENT_SEASON - offset
+            season = base_season - offset
             log.info(f"Fetching {config.SUPPORTED_LEAGUES[league]} — season {season}...")
 
             try:
@@ -76,6 +83,11 @@ class FootballDataCollector:
 
             for m in data.get("matches", []):
                 if m["status"] != "FINISHED":
+                    continue
+
+                # API-Lag: Spiel als FINISHED markiert, Ergebnis aber noch nicht
+                # eingetragen → überspringen, kommt beim nächsten Fetch nach
+                if m["score"]["fullTime"]["home"] is None or m["score"]["fullTime"]["away"] is None:
                     continue
 
                 match = Match(
@@ -93,10 +105,16 @@ class FootballDataCollector:
                     group_name   = m.get("group"),
                 )
 
-                # Upsert: skip if already in DB
+                # Upsert: neu anlegen, oder Ergebnis nachtragen falls es beim
+                # ersten Fetch noch fehlte (API-Lag direkt nach Abpfiff)
                 existing = session.query(Match).filter_by(api_id=match.api_id).first()
                 if not existing:
                     session.add(match)
+                    all_matches.append(m)
+                elif existing.home_goals is None or existing.away_goals is None:
+                    existing.home_goals = match.home_goals
+                    existing.away_goals = match.away_goals
+                    existing.status     = match.status
                     all_matches.append(m)
 
         session.commit()
@@ -154,10 +172,20 @@ class FootballDataCollector:
         Gibt dict zurück: {team_name: {position, points, gd, group}} — Position innerhalb der Gruppe.
         """
         from src.utils.database import get_session as _gs, Match as _M, Team as _T
+        from sqlalchemy import func as _func
         sess = _gs()
         try:
+            # Ohne explizite Saison: nur das AKTUELLSTE Turnier werten —
+            # Gruppennamen (GROUP_A …) kollidieren sonst über Jahrzehnte hinweg
+            if not season:
+                season = sess.query(_func.max(_M.season)).filter(
+                    _M.league == "WC", _M.stage == "GROUP_STAGE"
+                ).scalar()
+
             q = sess.query(_M).filter(_M.league == "WC", _M.status == "FINISHED",
-                                      _M.stage == "GROUP_STAGE")
+                                      _M.stage == "GROUP_STAGE",
+                                      _M.home_goals.isnot(None),
+                                      _M.away_goals.isnot(None))
             if season:
                 q = q.filter(_M.season == str(season))
             matches = q.all()
@@ -220,55 +248,61 @@ class FootballDataCollector:
         from pathlib import Path
         from datetime import datetime
 
-        # WC: aus DB berechnen (kein API-Call nötig)
-        if league_code == "WC":
-            return self.get_wc_group_standings()
-
-        # Welcher Wettbewerb? (Code übersetzen falls nötig)
-        fd_league_map = {"BL1": "BL1", "PL": "PL", "PD": "PD", "SA": "SA", "FL1": "FL1"}
-        comp_code = fd_league_map.get(league_code)
-        if not comp_code:
+        if league_code not in config.SUPPORTED_LEAGUES:
             return {}
 
         # Cache-Datei für heute
         today_str = datetime.now().strftime("%Y-%m-%d")
         cache_dir = Path("data/cache/standings")
         cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_file = cache_dir / f"standings_{comp_code}_{today_str}.json"
+        cache_file = cache_dir / f"standings_{league_code}_{today_str}.json"
 
         # 1. Haben wir die Tabelle heute schon geladen?
         if cache_file.exists():
-            log.info(f"Lade Tabelle für {comp_code} aus lokalem Tages-Cache...")
+            log.info(f"Lade Tabelle für {league_code} aus lokalem Tages-Cache...")
             with open(cache_file, "r", encoding="utf-8") as f:
                 return json.load(f)
 
         # 2. Wenn nein: API anrufen! (Wir nutzen dein schlaues self._get)
-        log.info(f"API Call: Lade LIVE Tabelle für {comp_code} herunter...")
-        
+        log.info(f"API Call: Lade LIVE Tabelle für {league_code} herunter...")
+
         try:
-            data = self._get(f"competitions/{comp_code}/standings")
-            
-            # Wir extrahieren nur die "TOTAL" Tabelle
+            data = self._get(f"competitions/{league_code}/standings")
+
+            # "TOTAL"-Tabellen extrahieren. Bei Turnieren (WC) liefert die API
+            # eine Tabelle PRO GRUPPE — wir merken uns die Gruppe und die
+            # Position innerhalb der Gruppe.
             standings_data = {}
             for standing in data.get("standings", []):
-                if standing.get("type") == "TOTAL":
-                    for row in standing.get("table", []):
-                        team_name = row.get("team", {}).get("name")
-                        standings_data[team_name] = {
-                            "position": row.get("position"),
-                            "points": row.get("points"),
-                            "playedGames": row.get("playedGames"),
-                            "goalDifference": row.get("goalDifference")
-                        }
-            
+                if standing.get("type") != "TOTAL":
+                    continue
+                group = standing.get("group")  # z.B. "GROUP_A" oder None bei Ligen
+                if group:
+                    group = group.upper().replace("GROUP ", "GROUP_")
+                for row in standing.get("table", []):
+                    team_name = row.get("team", {}).get("name")
+                    entry = {
+                        "position": row.get("position"),
+                        "points": row.get("points"),
+                        "playedGames": row.get("playedGames"),
+                        "goalDifference": row.get("goalDifference"),
+                    }
+                    if group:
+                        entry["group"] = group
+                        entry["gd"] = row.get("goalDifference", 0)
+                    standings_data[team_name] = entry
+
             # 3. Im Cache speichern
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(standings_data, f, ensure_ascii=False, indent=4)
-                
+
             return standings_data
-            
+
         except Exception as e:
             log.error(f"Fehler beim Laden der Tabelle: {e}")
+            # WC-Fallback: Gruppenstandings aus der lokalen DB berechnen
+            if league_code == "WC":
+                return self.get_wc_group_standings()
             return {}
 
     # ── Private: Raw → DataFrame ─────────────────────────────────────────────

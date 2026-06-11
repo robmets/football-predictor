@@ -179,13 +179,23 @@ def load_teams_from_db(league: str = "BL1") -> list[str]:
         return []
 
 
+@st.cache_data(ttl=3600)
+def load_live_standings(league: str) -> dict:
+    """Tagesaktuelle Tabelle (bei WC: Gruppenstandings inkl. Gruppenzuordnung)."""
+    try:
+        from src.collectors.football_data_collector import FootballDataCollector
+        return FootballDataCollector().get_live_standings(league)
+    except Exception:
+        return {}
+
+
 @st.cache_resource
 def get_fitted_model(league: str = "BL1") -> PoissonModel | None:
     df = load_features(league)
     if df.empty:
         return None
     model = PoissonModel()
-    model.fit(df)
+    model.fit(df, league=league)
     return model
 
 
@@ -203,9 +213,11 @@ with st.sidebar:
     )
 
     st.markdown("---")
+    _league_codes = list(config.SUPPORTED_LEAGUES)
     league = st.selectbox(
         "Liga / Turnier",
-        options=["WC", "BL1", "PL", "PD", "SA", "FL1", "CL", "EL", "UECL", "BL2", "ELC", "SD", "SB", "FL2"],
+        options=_league_codes,
+        index=_league_codes.index("WC") if "WC" in _league_codes else 0,
         format_func=lambda x: config.SUPPORTED_LEAGUES.get(x, x),
     )
     sims = st.select_slider(
@@ -242,11 +254,16 @@ with st.sidebar:
                 import pandas as _pd
                 from src.collectors.football_data_collector import FootballDataCollector as _FDC
                 from src.features.feature_builder import FeatureBuilder as _FB
-                if league != "WC":  # WC historical data comes from CSV import
-                    _FDC().fetch_matches(league=league, seasons=2)
-                    _FDC().fetch_teams(league=league)
+                # WC: Historie kommt aus CSV-Import, aktuelle Turnier-Spiele (2026)
+                # werden zusätzlich live von der API geholt
+                _seasons = 1 if league == "WC" else 2
+                _FDC().fetch_matches(league=league, seasons=_seasons)
+                _FDC().fetch_teams(league=league)
                 sess2 = _gs()
-                _matches = sess2.query(_Match).filter(_Match.league == league, _Match.status == "FINISHED").all()
+                _matches = sess2.query(_Match).filter(
+                    _Match.league == league, _Match.status == "FINISHED",
+                    _Match.home_goals.isnot(None), _Match.away_goals.isnot(None),
+                ).all()
                 _tmap = {t.api_id: t.name for t in sess2.query(_Team).all()}
                 sess2.close()
                 def _r(h, a): return "H" if h > a else ("A" if h < a else "D")
@@ -399,34 +416,55 @@ if page == "🎯 Match Prediction":
 
     elif league == "WC":
         st.markdown('<p class="section-title">🌍 WM-Runde & Gruppe</p>', unsafe_allow_html=True)
+
+        # Stage-Optionen aus der Context-Engine ableiten (keine Duplikation)
+        from src.features.context_engine import WC_STAGE_CONFIG, WC_GROUP_URGENCY
         WC_STAGES = {
-            "🏆 Gruppenphase — Spieltag 1":  ("GROUP_STAGE", 1),
-            "🏆 Gruppenphase — Spieltag 2":  ("GROUP_STAGE", 2),
-            "🏆 Gruppenphase — Spieltag 3":  ("GROUP_STAGE", 3),
-            "🔵 Round of 32":                ("LAST_32",     4),
-            "🔵 Round of 16":                ("LAST_16",     4),
-            "🟡 Viertelfinale":              ("QUARTER_FINALS", 5),
-            "🟠 Halbfinale":                 ("SEMI_FINALS",    6),
-            "⚪ Spiel um Platz 3":           ("THIRD_PLACE",    7),
-            "🔴 Finale":                     ("FINAL",          8),
+            f"🏆 Gruppenphase — Spieltag {md}": ("GROUP_STAGE", md)
+            for md in sorted(WC_GROUP_URGENCY)
         }
+        for _stage_key, (_boost, _urg, _label) in WC_STAGE_CONFIG.items():
+            WC_STAGES[f"🏆 {_label}"] = (_stage_key, None)
+
         selected_wc = st.selectbox(
             "WM — Runde",
             options=list(WC_STAGES.keys()),
-            index=1,
+            index=0,
             help="Bestimmt Motivation und Urgency der Teams.",
         )
         wc_stage_selected, manual_matchday = WC_STAGES[selected_wc]
 
+        # Live-Gruppenstandings (API, Tages-Cache) — liefert auch die Gruppenliste
+        wc_standings = load_live_standings("WC")
+
         # Group selector (only relevant for group stage)
         if wc_stage_selected == "GROUP_STAGE":
-            WC_GROUPS = ["GROUP_A", "GROUP_B", "GROUP_C", "GROUP_D", "GROUP_E", "GROUP_F",
-                         "GROUP_G", "GROUP_H", "GROUP_I", "GROUP_J", "GROUP_K", "GROUP_L"]
+            wc_groups = sorted({s.get("group") for s in wc_standings.values() if s.get("group")})
+            if not wc_groups:
+                wc_groups = [f"GROUP_{chr(c)}" for c in range(ord("A"), ord("L") + 1)]
             wc_group_selected = st.selectbox(
                 "Gruppe",
-                options=WC_GROUPS,
+                options=wc_groups,
                 format_func=lambda x: x.replace("GROUP_", "Gruppe "),
             )
+
+            # Aktuelle Gruppentabelle direkt anzeigen
+            grp_teams = {t: s for t, s in wc_standings.items()
+                         if s.get("group") == wc_group_selected}
+            if grp_teams:
+                grp_rows = sorted(grp_teams.items(), key=lambda x: x[1].get("position", 99))
+                grp_df = pd.DataFrame([
+                    {"#": s.get("position", ""), "Team": t,
+                     "Spiele": s.get("playedGames", 0),
+                     "Pkt": s.get("points", 0),
+                     "TD": s.get("goalDifference", s.get("gd", 0))}
+                    for t, s in grp_rows
+                ])
+                st.markdown(
+                    f'<p class="section-title">🌍 {wc_group_selected.replace("GROUP_", "Gruppe ")} — Aktuelle Tabelle</p>',
+                    unsafe_allow_html=True,
+                )
+                st.dataframe(grp_df, hide_index=True, width='stretch')
 
         # Neutral venue notice
         st.info("⚖️ Neutrales Spielfeld — kein Heimvorteil im Poisson-Modell", icon="🌍")
@@ -463,6 +501,8 @@ if page == "🎯 Match Prediction":
             away_starters = []
             modus = "C"
 
+            # Lineup-Suche braucht beide Teams — Ratings/Penalty pro Team unabhängig,
+            # damit ein fehlendes Sofascore-Mapping nicht beide Teams blockiert
             if home_ss_id and away_ss_id:
                 match_id = sofascore.get_match_id(home_ss_id, away_team)
 
@@ -489,21 +529,21 @@ if page == "🎯 Match Prediction":
                                 home_starters, away_starters = h_st[:11], a_st[:11]
                                 modus = "B"
 
-                if home_ss_id:
-                    home_ssc = sofascore.get_injured_player_impact(
-                        home_ss_id, home_missing_names,
-                        match_starters=home_starters if modus in ("A", "B") else None,
-                    )
-                    home_sofascore_penalty = home_ssc["penalty"]
-                    home_sofascore_rating  = home_ssc["team_avg_rating"]
+            if home_ss_id:
+                home_ssc = sofascore.get_injured_player_impact(
+                    home_ss_id, home_missing_names,
+                    match_starters=home_starters if modus in ("A", "B") else None,
+                )
+                home_sofascore_penalty = home_ssc["penalty"]
+                home_sofascore_rating  = home_ssc["team_avg_rating"]
 
-                if away_ss_id:
-                    away_ssc = sofascore.get_injured_player_impact(
-                        away_ss_id, away_missing_names,
-                        match_starters=away_starters if modus in ("A", "B") else None,
-                    )
-                    away_sofascore_penalty = away_ssc["penalty"]
-                    away_sofascore_rating  = away_ssc["team_avg_rating"]
+            if away_ss_id:
+                away_ssc = sofascore.get_injured_player_impact(
+                    away_ss_id, away_missing_names,
+                    match_starters=away_starters if modus in ("A", "B") else None,
+                )
+                away_sofascore_penalty = away_ssc["penalty"]
+                away_sofascore_rating  = away_ssc["team_avg_rating"]
 
             home_total_impact = home_inj + home_sofascore_penalty
             away_total_impact = away_inj + away_sofascore_penalty
@@ -527,11 +567,7 @@ if page == "🎯 Match Prediction":
             # H2H über ALLE Wettbewerbe (z.B. La Liga + CL für Atletico vs Barcelona)
             h2h = form_calc.get_h2h_factor(home_team, away_team, league, features_df=df)
 
-            try:
-                from src.collectors.football_data_collector import FootballDataCollector as _FDC2
-                standings = _FDC2().get_live_standings(league)
-            except Exception:
-                standings = {}
+            standings = load_live_standings(league)
 
             ctx_engine = ContextEngine()
             if league == "WC":
@@ -600,20 +636,6 @@ if page == "🎯 Match Prediction":
             # ── Vorhersage in DB speichern ──────────────────────────────────
             pred_id = XGBoostFeedbackModel.save_prediction(result, league=league)
             result["prediction_id"] = pred_id
-
-        # ── WC Group Standings anzeigen ─────────────────────────────────────
-        if league == "WC" and wc_stage_selected == "GROUP_STAGE" and wc_group_selected and standings:
-            grp_label = wc_group_selected.replace("GROUP_", "Gruppe ")
-            grp_teams = {t: s for t, s in standings.items() if s.get("group") == wc_group_selected}
-            if grp_teams:
-                st.markdown(f'<p class="section-title">🌍 {grp_label} — Aktuelle Tabelle</p>', unsafe_allow_html=True)
-                grp_rows = sorted(grp_teams.items(), key=lambda x: (x[1].get("position", 99)))
-                grp_df = pd.DataFrame([
-                    {"#": s.get("position", ""), "Team": t,
-                     "Pkt": s.get("points", 0), "TD": s.get("gd", 0)}
-                    for t, s in grp_rows
-                ])
-                st.dataframe(grp_df, hide_index=True, use_container_width=True)
 
         # ── Matchup Header ──────────────────────────────────────────────────
         is_knockout = result.get("is_knockout", False)
@@ -786,7 +808,7 @@ elif page == "📊 Team Ratings":
 
     with st.spinner("Poisson-Modell wird gefittet..."):
         model = PoissonModel()
-        model.fit(df)
+        model.fit(df, league=league)
         ratings = model.team_ratings()
 
     fig_bar = go.Figure(go.Bar(
@@ -876,7 +898,7 @@ elif page == "💰 Value Bets":
     if st.button("🔍 Analysieren", type="primary", width='stretch') and vb_home != vb_away:
         with st.spinner("Modell + Odds laden..."):
             model = PoissonModel()
-            model.fit(df)
+            model.fit(df, league=league)
             sim = MonteCarloSimulator(model)
             model_result = sim.simulate(vb_home, vb_away, n=10_000)
             odds_collector = OddsCollector()

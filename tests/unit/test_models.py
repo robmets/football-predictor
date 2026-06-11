@@ -64,6 +64,38 @@ def test_home_advantage_applied(fitted_model):
     assert lh > 0 and la > 0
 
 
+def test_neutral_venue_league_fixes_home_advantage(sample_df):
+    """WC/EC: neutrale Spielorte → home_advantage exakt 1.0."""
+    m = PoissonModel()
+    m.fit(sample_df, league="WC")
+    assert m.home_advantage == 1.0
+
+
+def test_tournament_decay_keeps_old_data_relevant(sample_df):
+    """WC nutzt langsamen Zeit-Decay — Ratings dürfen nicht degenerieren."""
+    df = sample_df.copy()
+    df["date"] = pd.Timestamp("2022-12-01")  # ~3.5 Jahre alt (wie WC-2022-Daten)
+    m = PoissonModel()
+    m.fit(df, league="WC")
+    # Mit Klub-Decay (xi=0.003) hätten diese Spiele Gewicht ~0.02 und die
+    # MLE würde an die Bounds laufen — mit Turnier-Decay bleiben Werte moderat
+    for team, att in m.attack.items():
+        assert 0.3 < att < 3.0, f"{team} attack degeneriert: {att}"
+
+
+def test_min_games_assigns_league_average(sample_df):
+    """Teams mit zu wenigen Spielen bekommen Liga-Schnitt (1.0/1.0)."""
+    df = sample_df.copy()
+    df.loc[len(df)] = {
+        "home_team": "Exot", "away_team": "Bayern",
+        "home_goals": 5, "away_goals": 0, "result": "H", "season": "2023",
+    }
+    m = PoissonModel()
+    m.fit(df, min_games=5)
+    assert m.attack["Exot"] == 1.0
+    assert m.defence["Exot"] == 1.0
+
+
 def test_team_ratings_returns_all_teams(fitted_model, sample_df):
     ratings = fitted_model.team_ratings()
     all_teams = set(sample_df["home_team"]) | set(sample_df["away_team"])
