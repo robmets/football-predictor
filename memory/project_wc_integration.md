@@ -33,9 +33,17 @@ WC integration built on branch `wc_integration` (June 2026). Tested and working 
 - Team mapping is DYNAMIC (map_teams.py), not hardcoded — identical to other leagues
 - Dashboard load_teams_from_db: WC filters api_id < 800000 to show only current 2026 participants
 
+**Fixes 2026-06-12 (commit 6a78296):**
+- Poisson: league-aware Dixon-Coles decay via `config.POISSON_TIME_DECAY` (WC/EC xi=0.0002, club 0.003) — old decay left total weight 1.35 over 964 WC matches, France pinned at attack bound 4.0 → 98.8% vs Germany. Now France/Germany λ ~1.4, ridge prior (RIDGE_STRENGTH=2.0) shrinks sparse teams to 1.0, `min_games` enforced, `home_advantage` fixed 1.0 for `config.NEUTRAL_VENUE_LEAGUES`. All `fit()` callers pass `league=`.
+- Group tables: `get_live_standings("WC")` now hits football-data.org standings API (daily cache, group field normalized to GROUP_X) — live 2026 groups; DB fallback restricted to latest tournament season.
+- Tournament season = calendar year in `fetch_matches` (June 2026 previously resolved to season 2025 → fetched nothing). Null-score FINISHED matches (API lag) skipped + healed on next fetch.
+- Dashboard: WC refresh fetches live API matches; stage/group selectors derived from WC_STAGE_CONFIG + live standings; group table shown under selector; league list from config; `use_container_width` → `width='stretch'`.
+- Transfermarkt: national-team squad pages need fallback parser (`_parse_squad_fallback` in TransfermarktCollector) — vendored library xpath `td.posrela` returns empty there. Hardcoded country alias dict removed.
+- Sofascore per-team independent in dashboard/predict (one unmapped team no longer kills both).
+
 **Known limitations:**
-- France λ very high (6.97 vs Germany) because sparse historical data skews attack ratings. Will improve as 2026 matches come in.
-- Group standings table shows historical group data (e.g. Gruppe E = Netherlands/Denmark from old WCs). Will show live data once 2026 group games start (June 11, 2026).
+- Sofascore API fully blocked (403 "challenge" on all endpoints/hosts/impersonations as of 2026-06-12) — affects ALL leagues, not just WC. Pipeline degrades gracefully (rating_factor 1.0). Would need a different data source if it persists.
 - Cape Verde Islands and Congo DR have no TM mapping (not on Transfermarkt).
+- 72 tests pass (3 new Poisson regression tests in test_models.py).
 
 **How to apply:** When user asks about WC predictions, WC data pipeline, or tournament mode — refer to this integration. All changes are additive with `if league == "WC"` guards.
